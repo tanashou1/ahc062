@@ -1,0 +1,11 @@
+[package]
+name = "ahc062"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rand = { version = "0.8", features = ["small_rng"] }
+
+[profile.release]
+opt-level = 3
+lto = true
