@@ -254,7 +254,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
         let l = 1 + rng.next_usize(n2 - 2);
 
         let roll = rng.next_u64() % 16;
-        if roll == 0 {  // 6.25% 2-opt, 6.25% block_swap, 87.5% or-opt
+        if roll == 0 {  // 6.25% 2-opt, 12.5% block_swap, 81.25% or-opt
             // ── 2-opt ────────────────────────────────────────────────────────
             let (pr, pc) = path[l - 1];
             for dr in -1i64..=1 {
@@ -282,7 +282,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                     twoopt_iters += 1;
                 }
             }
-        } else if roll == 1 {
+        } else if roll <= 5 {
             // ── block_swap: [l..m] ↔ [p..q] (equal size, both reversed) ─────
             let (pr, pc) = path[l - 1];
             for dr in -1i64..=1 {
