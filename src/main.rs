@@ -36,7 +36,7 @@ fn main() {
     let raw = raw_score(&a, &path);
     eprintln!("init_score={}", display_score(raw, (n * n) as i64));
 
-    let phase1_end = 1200u64;
+    let phase1_end = 600u64;
     sa_block_swap(&a, &mut path, n, &mut Rng::new(42), timer, phase1_end);
     sa_twoopt(&a, &mut path, n, &mut Rng::new(43), timer);
 
@@ -238,7 +238,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let sa_start_ms = timer.elapsed().as_millis() as f64;
     let sa_end_ms   = TIME_LIMIT_MS as f64;
     let sa_duration = (sa_end_ms - sa_start_ms).max(1.0);
-    let t_start = 5e7f64;
+    let t_start = 1e7f64;
     let t_end   = 1e3f64;
     let mut twoopt_iters    = 0u64;
     let mut twoopt_accepted = 0u64;
@@ -253,7 +253,8 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
 
         let l = 1 + rng.next_usize(n2 - 2);
 
-        if rng.next_u64() % 16 == 0 {  // 6.25% 2-opt, 93.75% or-opt
+        let roll = rng.next_u64() % 16;
+        if roll == 0 {  // 6.25% 2-opt, 93.75% standard or-opt
             // ── 2-opt ────────────────────────────────────────────────────────
             let (pr, pc) = path[l - 1];
             for dr in -1i64..=1 {
