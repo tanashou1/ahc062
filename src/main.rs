@@ -297,7 +297,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
 
                     let k_max = q.min(n2 - 1 - l).min((q - l) / 2);
                     if k_max == 0 { continue; }
-                    let k = 1 + rng.next_usize(k_max.min(10)); // limit to k<=10 for speed
+                    let k = 1 + rng.next_usize(k_max.min(3));
                     let m = l + k - 1;
                     let p = q - k + 1;
 
