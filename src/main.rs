@@ -1,39 +1,27 @@
-use std::collections::HashSet;
 use std::io::{self, Read};
+use std::time::Instant;
 
-const AREA_SIZE: usize = 10;
-const BASE_G0_PATH: [Pos; 50] = [
-    (4, 0), (3, 1), (2, 0), (1, 0), (0, 0), (0, 1), (1, 1), (0, 2), (1, 3), (2, 2),
-    (3, 3), (2, 4), (3, 5), (4, 4), (5, 3), (4, 2), (5, 1), (6, 0), (7, 1), (6, 2),
-    (7, 3), (8, 2), (9, 3), (8, 4), (9, 5), (8, 6), (7, 5), (6, 4), (5, 5), (4, 6),
-    (5, 7), (6, 6), (7, 7), (8, 8), (9, 7), (9, 8), (9, 9), (8, 9), (7, 9), (6, 8),
-    (5, 9), (4, 8), (3, 9), (2, 8), (3, 7), (2, 6), (1, 7), (0, 6), (1, 5), (0, 4),
-];
-const BASE_G1_DOWN_PATH: [Pos; 50] = [
-    (0, 3), (1, 2), (2, 1), (3, 0), (4, 1), (5, 0), (6, 1), (5, 2), (6, 3), (7, 2),
-    (8, 1), (7, 0), (8, 0), (9, 0), (9, 1), (9, 2), (8, 3), (9, 4), (8, 5), (7, 4),
-    (6, 5), (7, 6), (6, 7), (5, 6), (4, 7), (3, 6), (4, 5), (5, 4), (4, 3), (3, 2),
-    (2, 3), (3, 4), (2, 5), (1, 4), (0, 5), (1, 6), (2, 7), (1, 8), (0, 7), (0, 8),
-    (0, 9), (1, 9), (2, 9), (3, 8), (4, 9), (5, 8), (6, 9), (7, 8), (8, 7), (9, 6),
-];
-const BASE_G1_RIGHT_PATH: [Pos; 50] = [
-    (0, 3), (1, 2), (2, 1), (3, 0), (4, 1), (5, 0), (6, 1), (5, 2), (4, 3), (3, 2),
-    (2, 3), (3, 4), (2, 5), (1, 4), (0, 5), (1, 6), (0, 7), (0, 8), (1, 9), (2, 9),
-    (3, 8), (4, 9), (5, 8), (6, 9), (7, 8), (6, 7), (7, 6), (8, 7), (9, 6), (8, 5),
-    (9, 4), (8, 3), (9, 2), (9, 1), (9, 0), (8, 0), (7, 0), (8, 1), (7, 2), (6, 3),
-    (7, 4), (6, 5), (5, 4), (4, 5), (5, 6), (4, 7), (3, 6), (2, 7), (1, 8), (0, 9),
-];
+const TIME_LIMIT_MS: u64 = 2850;
 
 type Pos = (usize, usize);
 
-#[derive(Clone)]
-struct Candidate {
-    path: Vec<Pos>,
-    start: Pos,
-    end: Pos,
+struct Rng {
+    state: u64,
+}
+impl Rng {
+    fn new(seed: u64) -> Self { Rng { state: seed | 1 } }
+    fn next_u64(&mut self) -> u64 {
+        self.state ^= self.state << 13;
+        self.state ^= self.state >> 7;
+        self.state ^= self.state << 17;
+        self.state
+    }
+    fn next_usize(&mut self, n: usize) -> usize { (self.next_u64() % n as u64) as usize }
+    fn next_f64(&mut self) -> f64 { (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64) }
 }
 
 fn main() {
+    let timer = Instant::now();
     let mut input = String::new();
     io::stdin().read_to_string(&mut input).unwrap();
     let mut iter = input.split_ascii_whitespace();
@@ -41,253 +29,364 @@ fn main() {
     let n: usize = iter.next().unwrap().parse().unwrap();
     let mut a = vec![vec![0i64; n]; n];
     for row in &mut a {
-        for x in row {
-            *x = iter.next().unwrap().parse().unwrap();
-        }
+        for x in row { *x = iter.next().unwrap().parse().unwrap(); }
     }
 
-    let path = solve(&a, n);
-    validate_path(&path, n);
+    let mut path = snake_path(n);
+    let raw = raw_score(&a, &path);
+    eprintln!("init_score={}", display_score(raw, (n * n) as i64));
 
+    let phase1_end = 1200u64;
+    sa_block_swap(&a, &mut path, n, &mut Rng::new(42), timer, phase1_end);
+    sa_twoopt(&a, &mut path, n, &mut Rng::new(43), timer);
+
+    validate_path(&path, n);
     let raw = raw_score(&a, &path);
     eprintln!("score={}", display_score(raw, (n * n) as i64));
-
-    for (r, c) in path {
-        println!("{r} {c}");
-    }
+    for (r, c) in path { println!("{r} {c}"); }
 }
 
-fn solve(a: &[Vec<i64>], n: usize) -> Vec<Pos> {
-    assert_eq!(n % AREA_SIZE, 0);
-    let area_n = n / AREA_SIZE;
-    let candidates = generate_candidates();
-    let area_orders = generate_area_orders(area_n);
-
-    let mut best_raw = i64::MIN;
-    let mut best_path = Vec::new();
-
-    for order in area_orders {
-        let path = build_path_for_order(a, &order, &candidates);
-        let raw = raw_score(a, &path);
-        if raw > best_raw {
-            best_raw = raw;
-            best_path = path;
-        }
-    }
-
-    best_path
-}
-
-fn build_path_for_order(a: &[Vec<i64>], order: &[(usize, usize)], candidates: &[Candidate]) -> Vec<Pos> {
-    let cand_n = candidates.len();
-    let area_count = order.len();
-    let mut local_scores = vec![vec![0i64; cand_n]; area_count];
-    let mut starts = vec![vec![(0usize, 0usize); cand_n]; area_count];
-    let mut ends = vec![vec![(0usize, 0usize); cand_n]; area_count];
-
-    for (idx, &(ar, ac)) in order.iter().enumerate() {
-        let base_r = ar * AREA_SIZE;
-        let base_c = ac * AREA_SIZE;
-        let offset = idx * AREA_SIZE * AREA_SIZE;
-        for (ci, cand) in candidates.iter().enumerate() {
-            let mut score = 0i64;
-            for (dt, &(r, c)) in cand.path.iter().enumerate() {
-                score += (offset + dt) as i64 * a[base_r + r][base_c + c];
-            }
-            local_scores[idx][ci] = score;
-            starts[idx][ci] = (base_r + cand.start.0, base_c + cand.start.1);
-            ends[idx][ci] = (base_r + cand.end.0, base_c + cand.end.1);
-        }
-    }
-
-    let mut parent = vec![vec![usize::MAX; cand_n]; area_count];
-    let mut dp_prev = local_scores[0].clone();
-
-    for idx in 1..area_count {
-        let mut dp_cur = vec![i64::MIN; cand_n];
-        for cur in 0..cand_n {
-            let cur_start = starts[idx][cur];
-            let local = local_scores[idx][cur];
-            for prev in 0..cand_n {
-                if dp_prev[prev] == i64::MIN || !king_adj(ends[idx - 1][prev], cur_start) {
-                    continue;
-                }
-                let cand_score = dp_prev[prev] + local;
-                if cand_score > dp_cur[cur] {
-                    dp_cur[cur] = cand_score;
-                    parent[idx][cur] = prev;
-                }
-            }
-        }
-        dp_prev = dp_cur;
-    }
-
-    let mut last = 0usize;
-    for i in 1..cand_n {
-        if dp_prev[i] > dp_prev[last] {
-            last = i;
-        }
-    }
-    assert!(dp_prev[last] != i64::MIN, "failed to connect area templates");
-
-    let mut chosen = vec![0usize; area_count];
-    let mut cur = last;
-    for idx in (0..area_count).rev() {
-        chosen[idx] = cur;
-        if idx > 0 {
-            cur = parent[idx][cur];
-            assert!(cur != usize::MAX, "broken parent chain");
-        }
-    }
-
-    let mut path = Vec::with_capacity(a.len() * a.len());
-    for (idx, &(ar, ac)) in order.iter().enumerate() {
-        let base_r = ar * AREA_SIZE;
-        let base_c = ac * AREA_SIZE;
-        for &(r, c) in &candidates[chosen[idx]].path {
-            path.push((base_r + r, base_c + c));
+fn snake_path(n: usize) -> Vec<Pos> {
+    let mut path = Vec::with_capacity(n * n);
+    for i in 0..n {
+        if i % 2 == 0 {
+            for j in 0..n { path.push((i, j)); }
+        } else {
+            for j in (0..n).rev() { path.push((i, j)); }
         }
     }
     path
 }
 
-fn generate_candidates() -> Vec<Candidate> {
-    let mut bases = Vec::new();
-    let mut turn = Vec::with_capacity(AREA_SIZE * AREA_SIZE);
-    turn.extend_from_slice(&BASE_G0_PATH);
-    turn.extend_from_slice(&BASE_G1_DOWN_PATH);
-    bases.push(turn);
+fn sa_block_swap(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer: Instant, end_ms: u64) {
+    let n2   = path.len();
+    let rows = a.len();
+    let cols = a[0].len();
+    let max_k = n;
 
-    let mut straight = Vec::with_capacity(AREA_SIZE * AREA_SIZE);
-    straight.extend_from_slice(&BASE_G0_PATH);
-    straight.extend_from_slice(&BASE_G1_RIGHT_PATH);
-    bases.push(straight);
+    let mut pos_in_path = vec![vec![0usize; cols]; rows];
+    for (t, &(r, c)) in path.iter().enumerate() { pos_in_path[r][c] = t; }
+    let mut a_val: Vec<i64> = path.iter().map(|&(r, c)| a[r][c]).collect();
 
-    let mut seen: HashSet<Vec<Pos>> = HashSet::new();
-    let mut out = Vec::new();
+    let sa_start_ms = timer.elapsed().as_millis() as f64;
+    let sa_end_ms   = end_ms as f64;
+    let sa_duration = (sa_end_ms - sa_start_ms).max(1.0);
+    let t_start = 5e7f64;
+    let t_end   = 1e3f64;
+    let mut bs_iters    = 0u64;
+    let mut bs_accepted = 0u64;
+    let mut fo_iters    = 0u64;
+    let mut fo_accepted = 0u64;
+    let mut buf = vec![(0usize, 0usize); max_k];
 
-    for base in bases {
-        for rev in [false, true] {
-            let seq: Vec<Pos> = if rev {
-                base.iter().rev().copied().collect()
-            } else {
-                base.clone()
-            };
-            for sym in 0..8 {
-                let transformed: Vec<Pos> = seq
-                    .iter()
-                    .map(|&p| transform_in_square(p, AREA_SIZE, sym))
-                    .collect();
-                if seen.insert(transformed.clone()) {
-                    validate_local_template(&transformed);
-                    out.push(Candidate {
-                        start: transformed[0],
-                        end: transformed[transformed.len() - 1],
-                        path: transformed,
-                    });
+    loop {
+        let elapsed = timer.elapsed().as_millis() as f64;
+        if elapsed >= sa_end_ms { break; }
+        let progress = (elapsed - sa_start_ms) / sa_duration;
+        let temp = t_start * (t_end / t_start).powf(progress);
+
+        if rng.next_u64() % 2 == 0 {
+            // ── 隣接グリッド行 4-opt (50%) ──────────────────────────────────
+            let r1 = rng.next_usize(n - 1);
+            let r2 = r1 + 1;
+            let a_col = rng.next_usize(n);
+            let k = 1 + rng.next_usize((n - a_col).min(max_k));
+
+            let l1 = pos_in_path[r1][a_col];
+            let dir1: i64 = if k > 1 {
+                let nxt = pos_in_path[r1][a_col + 1];
+                if nxt == l1 + 1 { 1 } else if nxt + 1 == l1 { -1 } else { continue }
+            } else { 1 };
+            let mut ok = true;
+            for i in 2..k {
+                let exp = l1 as i64 + dir1 * i as i64;
+                if exp < 0 || pos_in_path[r1][a_col + i] as i64 != exp { ok = false; break; }
+            }
+            if !ok { continue; }
+            let (la, ma) = if dir1 > 0 { (l1, l1 + k - 1) } else { (l1 + 1 - k, l1) };
+
+            let l2 = pos_in_path[r2][a_col];
+            let dir2: i64 = if k > 1 {
+                let nxt = pos_in_path[r2][a_col + 1];
+                if nxt == l2 + 1 { 1 } else if nxt + 1 == l2 { -1 } else { continue }
+            } else { 1 };
+            let mut ok = true;
+            for i in 2..k {
+                let exp = l2 as i64 + dir2 * i as i64;
+                if exp < 0 || pos_in_path[r2][a_col + i] as i64 != exp { ok = false; break; }
+            }
+            if !ok { continue; }
+            let (lb, qb) = if dir2 > 0 { (l2, l2 + k - 1) } else { (l2 + 1 - k, l2) };
+
+            let (l, m, p, q) = if la < lb { (la, ma, lb, qb) } else { (lb, qb, la, ma) };
+            if p <= m || l == 0 || q + 1 >= n2 { continue; }
+            if !king_adj(path[l - 1], path[q]) { continue; }
+            if !king_adj(path[l],     path[q + 1]) { continue; }
+            if !king_adj(path[p],     path[m + 1]) { continue; }
+            if !king_adj(path[p - 1], path[m]) { continue; }
+
+            fo_iters += 1;
+            let mut delta: i64 = 0;
+            for i in 0..k {
+                delta += (l + i) as i64 * (a_val[p + k - 1 - i] - a_val[l + i]);
+                delta += (p + i) as i64 * (a_val[l + k - 1 - i] - a_val[p + i]);
+            }
+            if delta >= 0 || rng.next_f64() < (delta as f64 / temp).exp() {
+                buf[..k].copy_from_slice(&path[l..=m]);
+                for i in 0..k {
+                    path[l + i] = path[p + k - 1 - i];
+                    a_val[l + i] = a_val[p + k - 1 - i];
+                }
+                for i in 0..k {
+                    path[p + i] = buf[k - 1 - i];
+                    a_val[p + i] = a[buf[k - 1 - i].0][buf[k - 1 - i].1];
+                }
+                for i in l..=q { pos_in_path[path[i].0][path[i].1] = i; }
+                fo_accepted += 1;
+            }
+            continue;
+        }
+
+        // ── 通常 block_swap ──────────────────────────────────────────────────
+        let l = 1 + rng.next_usize(n2 - 2);
+        let (pr, pc) = path[l - 1];
+        for dr in -1i64..=1 {
+            for dc in -1i64..=1 {
+                if dr == 0 && dc == 0 { continue; }
+                let nr = pr as i64 + dr;
+                let nc = pc as i64 + dc;
+                if nr < 0 || nr >= rows as i64 || nc < 0 || nc >= cols as i64 { continue; }
+                let q = pos_in_path[nr as usize][nc as usize];
+                if q + 1 >= n2 || q <= l { continue; }
+                if !king_adj(path[l], path[q + 1]) { continue; }
+
+                let k_max = q.min(n2 - 1 - l).min((q - l) / 2);
+                if k_max == 0 { continue; }
+                let k = 1 + rng.next_usize(k_max.min(max_k));
+                let m = l + k - 1;
+                let p = q - k + 1;
+
+                if !king_adj(path[p], path[m + 1]) { continue; }
+                if !king_adj(path[p - 1], path[m]) { continue; }
+
+                let mut delta: i64 = 0;
+                for i in 0..k {
+                    delta += (l + i) as i64 * (a_val[p + k - 1 - i] - a_val[l + i]);
+                    delta += (p + i) as i64 * (a_val[l + k - 1 - i] - a_val[p + i]);
+                }
+
+                if delta >= 0 || rng.next_f64() < (delta as f64 / temp).exp() {
+                    buf[..k].copy_from_slice(&path[l..=m]);
+                    for i in 0..k {
+                        path[l + i] = path[p + k - 1 - i];
+                        a_val[l + i] = a_val[p + k - 1 - i];
+                    }
+                    for i in 0..k {
+                        path[p + i] = buf[k - 1 - i];
+                        a_val[p + i] = a[buf[k-1-i].0][buf[k-1-i].1];
+                    }
+                    for i in l..=q { pos_in_path[path[i].0][path[i].1] = i; }
+                    bs_accepted += 1;
+                }
+                bs_iters += 1;
+            }
+        }
+    }
+    eprintln!("block_swap: iters={bs_iters} acc={bs_accepted}");
+    eprintln!("fouropt:    iters={fo_iters} acc={fo_accepted}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SA: 2-opt + or-opt 統合
+//
+// [2-opt] path[l..=r] を逆転 (50%の確率)
+//   条件1: king_adj(path[l-1], path[r]) ← king隣接探索で保証
+//   条件2: king_adj(path[l], path[r+1])  (r+1 < n2)
+//   delta = Σ_{j=l}^{r} (l+r-2j) * a_val[j]
+//
+// [or-opt 右] [l..=m] を q > m の後ろへ移動
+//   条件1: king_adj(path[l-1], path[m+1]) ← outer loop 保証
+//   条件2: king_adj(path[q], path[l])     ← inner loop 保証
+//   条件3: king_adj(path[m], path[q+1])  (q+1 < n2)
+//   中間 [m+1..q] が左にずれる (shift -k)
+//   delta = (q-m)*sum_seg1 - k*sum_inter_right
+//
+// [or-opt 左] [l..=m] を q < l-1 の後ろへ移動 (q+1 の前へ)
+//   条件1: king_adj(path[l-1], path[m+1]) ← outer loop 保証
+//   条件2: king_adj(path[q], path[l])     ← inner loop 保証
+//   条件3: king_adj(path[m], path[q+1])
+//   中間 [q+1..l-1] が右にずれる (shift +k)
+//   delta = k*sum_inter_left - d*sum_seg1   (d = l-1-q)
+// ─────────────────────────────────────────────────────────────────────────────
+fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer: Instant) {
+    let n2   = path.len();
+    let rows = a.len();
+    let cols = a[0].len();
+    let oropt_max_dist = n2; // or-opt で q-m の最大距離 (unlimited)
+    let max_k = n;              // or-opt で移動するセグメントの最大長
+
+    let mut pos_in_path = vec![vec![0usize; cols]; rows];
+    for (t, &(r, c)) in path.iter().enumerate() { pos_in_path[r][c] = t; }
+    let mut a_val: Vec<i64> = path.iter().map(|&(r, c)| a[r][c]).collect();
+
+    // Prefix sum: psum[i] = Σa_val[0..i]
+    let mut psum = vec![0i64; n2 + 1];
+    for i in 0..n2 { psum[i + 1] = psum[i] + a_val[i]; }
+
+    let mut buf = vec![(0usize, 0usize); max_k];
+
+    let sa_start_ms = timer.elapsed().as_millis() as f64;
+    let sa_end_ms   = TIME_LIMIT_MS as f64;
+    let sa_duration = (sa_end_ms - sa_start_ms).max(1.0);
+    let t_start = 5e7f64;
+    let t_end   = 1e3f64;
+    let mut twoopt_iters    = 0u64;
+    let mut twoopt_accepted = 0u64;
+    let mut oropt_iters    = 0u64;
+    let mut oropt_accepted = 0u64;
+
+    loop {
+        let elapsed = timer.elapsed().as_millis() as f64;
+        if elapsed >= sa_end_ms { break; }
+        let progress = (elapsed - sa_start_ms) / sa_duration;
+        let temp = t_start * (t_end / t_start).powf(progress);
+
+        let l = 1 + rng.next_usize(n2 - 2);
+
+        if rng.next_u64() % 16 == 0 {  // 6.25% 2-opt, 93.75% or-opt
+            // ── 2-opt ────────────────────────────────────────────────────────
+            let (pr, pc) = path[l - 1];
+            for dr in -1i64..=1 {
+                for dc in -1i64..=1 {
+                    if dr == 0 && dc == 0 { continue; }
+                    let nr = pr as i64 + dr;
+                    let nc = pc as i64 + dc;
+                    if nr < 0 || nr >= rows as i64 || nc < 0 || nc >= cols as i64 { continue; }
+                    let r = pos_in_path[nr as usize][nc as usize];
+                    if r <= l { continue; }
+                    if r + 1 < n2 && !king_adj(path[l], path[r + 1]) { continue; }
+
+                    let lr_sum = (l + r) as i64;
+                    let mut delta: i64 = 0;
+                    for j in l..=r { delta += (lr_sum - 2 * j as i64) * a_val[j]; }
+
+                    if delta >= 0 || rng.next_f64() < (delta as f64 / temp).exp() {
+                        path[l..=r].reverse();
+                        a_val[l..=r].reverse();
+                        for i in l..=r { pos_in_path[path[i].0][path[i].1] = i; }
+                        // update prefix sums for changed range [l..=r]
+                        for i in l..=r { psum[i + 1] = psum[i] + a_val[i]; }
+                        twoopt_accepted += 1;
+                    }
+                    twoopt_iters += 1;
+                }
+            }
+        } else {
+            // ── or-opt: [l..=m] を q の後ろへ移動 ───────────────────────────
+            // 条件1保証: path[l-1] の king 隣接から m+1 を探す
+            let (pr, pc) = path[l - 1];
+            'oropt: for dr in -1i64..=1 {
+                for dc in -1i64..=1 {
+                    if dr == 0 && dc == 0 { continue; }
+                    let nr = pr as i64 + dr;
+                    let nc = pc as i64 + dc;
+                    if nr < 0 || nr >= rows as i64 || nc < 0 || nc >= cols as i64 { continue; }
+                    let mp1 = pos_in_path[nr as usize][nc as usize];
+                    if mp1 <= l || mp1 >= n2 { continue; }
+                    let k = mp1 - l;
+                    if k > max_k { continue; }
+                    let m = mp1 - 1;
+
+                    // 条件2保証: path[l] の king 隣接から q を探す
+                    let (lr, lc) = path[l];
+                    for dr2 in -1i64..=1 {
+                        for dc2 in -1i64..=1 {
+                            if dr2 == 0 && dc2 == 0 { continue; }
+                            let nr2 = lr as i64 + dr2;
+                            let nc2 = lc as i64 + dc2;
+                            if nr2 < 0 || nr2 >= rows as i64 || nc2 < 0 || nc2 >= cols as i64 { continue; }
+                            let q = pos_in_path[nr2 as usize][nc2 as usize];
+                            let is_right = q > m && q - m <= oropt_max_dist;
+                            let is_left  = q + 1 < l; // q < l-1
+                            if !is_right && !is_left { continue; }
+
+                            // 条件3: king_adj(path[m], path[q+1])
+                            if is_right {
+                                if q + 1 < n2 && !king_adj(path[m], path[q + 1]) { continue; }
+                            } else {
+                                // q+1 <= l-1 <= m, always valid index
+                                if !king_adj(path[m], path[q + 1]) { continue; }
+                            }
+
+                            oropt_iters += 1;
+
+                            let sum_seg1 = psum[m + 1] - psum[l];
+                            let delta = if is_right {
+                                let sum_inter = psum[q + 1] - psum[mp1];
+                                (q - m) as i64 * sum_seg1 - k as i64 * sum_inter
+                            } else {
+                                let d = l - 1 - q;
+                                let sum_inter = psum[l] - psum[q + 1];
+                                k as i64 * sum_inter - d as i64 * sum_seg1
+                            };
+
+                            if delta >= 0 || rng.next_f64() < (delta as f64 / temp).exp() {
+                                buf[..k].copy_from_slice(&path[l..=m]);
+                                if is_right {
+                                    // rotate_left(k): 中間 [m+1..q] → [l..q-k], セグメント → [q-k+1..q]
+                                    let new_start = q - k + 1;
+                                    for i in l..new_start {
+                                        path[i] = path[i + k];
+                                        a_val[i] = a_val[i + k];
+                                        pos_in_path[path[i].0][path[i].1] = i;
+                                    }
+                                    for i in 0..k {
+                                        path[new_start + i] = buf[i];
+                                        a_val[new_start + i] = a[buf[i].0][buf[i].1];
+                                        pos_in_path[path[new_start + i].0][path[new_start + i].1] = new_start + i;
+                                    }
+                                    for i in l..=q { psum[i + 1] = psum[i] + a_val[i]; }
+                                } else {
+                                    // rotate_right(k): 中間 [q+1..l-1] → [q+k+1..m], セグメント → [q+1..q+k]
+                                    let d = l - 1 - q;
+                                    for i in (0..d).rev() {
+                                        path[q + 1 + k + i] = path[q + 1 + i];
+                                        a_val[q + 1 + k + i] = a_val[q + 1 + i];
+                                        pos_in_path[path[q + 1 + k + i].0][path[q + 1 + k + i].1] = q + 1 + k + i;
+                                    }
+                                    for i in 0..k {
+                                        path[q + 1 + i] = buf[i];
+                                        a_val[q + 1 + i] = a[buf[i].0][buf[i].1];
+                                        pos_in_path[path[q + 1 + i].0][path[q + 1 + i].1] = q + 1 + i;
+                                    }
+                                    for i in q+1..=m { psum[i + 1] = psum[i] + a_val[i]; }
+                                }
+                                oropt_accepted += 1;
+                                break 'oropt;
+                            }
+                        }
+                    }
                 }
             }
         }
     }
-
-    out
-}
-
-fn validate_local_template(path: &[Pos]) {
-    assert_eq!(path.len(), AREA_SIZE * AREA_SIZE);
-    let mut used = [[false; AREA_SIZE]; AREA_SIZE];
-    for &p in path {
-        assert!(!used[p.0][p.1], "duplicate cell in local template");
-        used[p.0][p.1] = true;
-    }
-    for i in 1..path.len() {
-        assert!(king_adj(path[i - 1], path[i]), "broken local template edge");
-    }
-
-    let first_group = local_group(path[0]);
-    let second_group = local_group(path[AREA_SIZE * AREA_SIZE / 2]);
-    assert_ne!(first_group, second_group, "template must switch groups exactly once");
-    for &p in &path[..AREA_SIZE * AREA_SIZE / 2] {
-        assert_eq!(local_group(p), first_group, "first half mixes groups");
-    }
-    for &p in &path[AREA_SIZE * AREA_SIZE / 2..] {
-        assert_eq!(local_group(p), second_group, "second half mixes groups");
-    }
-}
-
-fn generate_area_orders(area_n: usize) -> Vec<Vec<Pos>> {
-    let mut base = Vec::with_capacity(area_n * area_n);
-    for r in 0..area_n {
-        if r % 2 == 0 {
-            for c in 0..area_n {
-                base.push((r, c));
-            }
-        } else {
-            for c in (0..area_n).rev() {
-                base.push((r, c));
-            }
-        }
-    }
-
-    let mut out = Vec::new();
-    let mut seen: HashSet<Vec<Pos>> = HashSet::new();
-    for sym in 0..8 {
-        let order: Vec<Pos> = base
-            .iter()
-            .map(|&p| transform_in_square(p, area_n, sym))
-            .collect();
-        if seen.insert(order.clone()) {
-            out.push(order);
-        }
-    }
-    out
-}
-
-fn transform_in_square(mut p: Pos, size: usize, sym: usize) -> Pos {
-    let last = size - 1;
-    let rot = sym / 2;
-    let mirror = sym % 2 == 1;
-    for _ in 0..rot {
-        p = (p.1, last - p.0);
-    }
-    if mirror {
-        p.1 = last - p.1;
-    }
-    p
-}
-
-fn local_group((r, c): Pos) -> usize {
-    match (r, c) {
-        (0, 1) | (1, 0) | (8, 9) | (9, 8) => 0,
-        (0, 8) | (1, 9) | (8, 0) | (9, 1) => 1,
-        _ => (r + c) & 1,
-    }
-}
-
-fn validate_path(path: &[Pos], n: usize) {
-    assert_eq!(path.len(), n * n, "wrong path length");
-    let mut used = vec![vec![false; n]; n];
-    for &(r, c) in path {
-        assert!(r < n && c < n, "path goes out of board");
-        assert!(!used[r][c], "duplicate cell in full path");
-        used[r][c] = true;
-    }
-    for i in 1..path.len() {
-        assert!(king_adj(path[i - 1], path[i]), "non-adjacent full path edge");
-    }
+    eprintln!("twoopt: iters={twoopt_iters} acc={twoopt_accepted}");
+    eprintln!("oropt:  iters={oropt_iters} acc={oropt_accepted}");
 }
 
 fn king_adj(a: Pos, b: Pos) -> bool {
     a.0.abs_diff(b.0).max(a.1.abs_diff(b.1)) == 1
 }
 
-fn raw_score(a: &[Vec<i64>], path: &[Pos]) -> i64 {
-    path.iter()
-        .enumerate()
-        .map(|(t, &(r, c))| t as i64 * a[r][c])
-        .sum()
+fn validate_path(path: &[Pos], n: usize) {
+    assert_eq!(path.len(), n * n);
+    let mut used = vec![vec![false; n]; n];
+    for &(r, c) in path { assert!(!used[r][c]); used[r][c] = true; }
+    for i in 1..path.len() { assert!(king_adj(path[i-1], path[i]), "non-adjacent at {i}"); }
 }
 
-fn display_score(raw: i64, n2: i64) -> i64 {
-    (raw + n2 / 2) / n2
+fn raw_score(a: &[Vec<i64>], path: &[Pos]) -> i64 {
+    path.iter().enumerate().map(|(t, &(r, c))| t as i64 * a[r][c]).sum()
 }
+
+fn display_score(raw: i64, n2: i64) -> i64 { (raw + n2 / 2) / n2 }
