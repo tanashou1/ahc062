@@ -254,7 +254,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
         let l = 1 + rng.next_usize(n2 - 2);
 
         let roll = rng.next_u64() % 16;
-        if roll == 0 {  // 6.25% 2-opt, 93.75% standard or-opt
+        if roll == 0 {  // 6.25% 2-opt, 6.25% block_swap, 87.5% or-opt
             // ── 2-opt ────────────────────────────────────────────────────────
             let (pr, pc) = path[l - 1];
             for dr in -1i64..=1 {
@@ -280,6 +280,50 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                         twoopt_accepted += 1;
                     }
                     twoopt_iters += 1;
+                }
+            }
+        } else if roll == 1 {
+            // ── block_swap: [l..m] ↔ [p..q] (equal size, both reversed) ─────
+            let (pr, pc) = path[l - 1];
+            for dr in -1i64..=1 {
+                for dc in -1i64..=1 {
+                    if dr == 0 && dc == 0 { continue; }
+                    let nr = pr as i64 + dr;
+                    let nc = pc as i64 + dc;
+                    if nr < 0 || nr >= rows as i64 || nc < 0 || nc >= cols as i64 { continue; }
+                    let q = pos_in_path[nr as usize][nc as usize];
+                    if q + 1 >= n2 || q <= l { continue; }
+                    if !king_adj(path[l], path[q + 1]) { continue; }
+
+                    let k_max = q.min(n2 - 1 - l).min((q - l) / 2);
+                    if k_max == 0 { continue; }
+                    let k = 1 + rng.next_usize(k_max.min(10)); // limit to k<=10 for speed
+                    let m = l + k - 1;
+                    let p = q - k + 1;
+
+                    if !king_adj(path[p], path[m + 1]) { continue; }
+                    if !king_adj(path[p - 1], path[m]) { continue; }
+
+                    let mut delta: i64 = 0;
+                    for i in 0..k {
+                        delta += (l + i) as i64 * (a_val[p + k - 1 - i] - a_val[l + i]);
+                        delta += (p + i) as i64 * (a_val[l + k - 1 - i] - a_val[p + i]);
+                    }
+
+                    if delta >= 0 || rng.next_f64() < (delta as f64 / temp).exp() {
+                        buf[..k].copy_from_slice(&path[l..=m]);
+                        for i in 0..k {
+                            path[l + i] = path[p + k - 1 - i];
+                            a_val[l + i] = a_val[p + k - 1 - i];
+                        }
+                        for i in 0..k {
+                            path[p + i] = buf[k - 1 - i];
+                            a_val[p + i] = a[buf[k - 1 - i].0][buf[k - 1 - i].1];
+                        }
+                        for i in l..=q { pos_in_path[path[i].0][path[i].1] = i; }
+                        for i in l..=q { psum[i + 1] = psum[i] + a_val[i]; }
+                    }
+                    break;
                 }
             }
         } else {
