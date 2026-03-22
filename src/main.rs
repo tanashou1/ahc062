@@ -243,7 +243,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let sa_end_ms   = TIME_LIMIT_MS as f64;
     let sa_duration = (sa_end_ms - sa_start_ms).max(1.0);
     let t_start = 1e7f64;
-    let t_end   = 1e3f64;
+    let t_end   = 3e4f64;
     let log_ratio = (t_end / t_start).ln(); // precompute for temp = t_start * exp(log_ratio * progress)
     let mut twoopt_iters    = 0u64;
     let mut twoopt_accepted = 0u64;
