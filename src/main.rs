@@ -1,7 +1,7 @@
 use std::io::{self, Read};
 use std::time::Instant;
 
-const TIME_LIMIT_MS: u64 = 2850;
+const TIME_LIMIT_MS: u64 = 2950;
 
 type Pos = (usize, usize);
 
@@ -330,6 +330,68 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                         for i in l..=q { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
                     }
                     break;
+                }
+            }
+        } else if roll <= 10 {
+            // ── or-opt-rev: [l..=m] を reversed で p の後ろへ移動 (右のみ) ──
+            // 条件1: king_adj(path[l-1], path[m+1]) ← outer loop 保証
+            // 条件2: king_adj(path[p], path[m])    ← inner loop (path[m] の隣接)
+            // 条件3: king_adj(path[l], path[p+1])  ← explicit check
+            // delta = -k*sum_C + (d-k+1+2m)*sum_B - 2*wseg_B
+            let (pr, pc) = path[l - 1];
+            'orrev: for dr in -1i64..=1 {
+                for dc in -1i64..=1 {
+                    if dr == 0 && dc == 0 { continue; }
+                    let nr = pr as i64 + dr;
+                    let nc = pc as i64 + dc;
+                    if nr < 0 || nr >= rows as i64 || nc < 0 || nc >= cols as i64 { continue; }
+                    let mp1 = pos_in_path[nr as usize][nc as usize];
+                    if mp1 <= l || mp1 >= n2 { continue; }
+                    let k = mp1 - l;
+                    if k > max_k { continue; }
+                    let m = mp1 - 1;
+
+                    let (mr, mc) = path[m];
+                    for dr2 in -1i64..=1 {
+                        for dc2 in -1i64..=1 {
+                            if dr2 == 0 && dc2 == 0 { continue; }
+                            let nr2 = mr as i64 + dr2;
+                            let nc2 = mc as i64 + dc2;
+                            if nr2 < 0 || nr2 >= rows as i64 || nc2 < 0 || nc2 >= cols as i64 { continue; }
+                            let p = pos_in_path[nr2 as usize][nc2 as usize];
+                            if p <= m { continue; } // right only
+
+                            // 条件3: king_adj(path[l], path[p+1])
+                            if p + 1 < n2 && !king_adj(path[l], path[p + 1]) { continue; }
+
+                            let sum_B  = psum[m + 1] - psum[l];
+                            let sum_C  = psum[p + 1] - psum[mp1];
+                            let wseg_B = wsum[m + 1] - wsum[l];
+                            let d = (p - m) as i64;
+                            let delta = -(k as i64) * sum_C
+                                + (d - k as i64 + 1 + 2 * m as i64) * sum_B
+                                - 2 * wseg_B;
+
+                            if delta >= 0 || rng.next_f64() < (delta as f64 / temp).exp() {
+                                buf[..k].copy_from_slice(&path[l..=m]);
+                                let new_start = p - k + 1;
+                                for i in l..new_start {
+                                    path[i] = path[i + k];
+                                    a_val[i] = a_val[i + k];
+                                    pos_in_path[path[i].0][path[i].1] = i;
+                                }
+                                for i in 0..k {
+                                    path[new_start + i] = buf[k - 1 - i];
+                                    a_val[new_start + i] = a[buf[k - 1 - i].0][buf[k - 1 - i].1];
+                                    pos_in_path[path[new_start + i].0][path[new_start + i].1] = new_start + i;
+                                }
+                                for i in l..=p { psum[i + 1] = psum[i] + a_val[i]; }
+                                for i in l..=p { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
+                                oropt_accepted += 1;
+                                break 'orrev;
+                            }
+                        }
+                    }
                 }
             }
         } else {
