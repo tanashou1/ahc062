@@ -244,16 +244,23 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let sa_duration = (sa_end_ms - sa_start_ms).max(1.0);
     let t_start = 1e7f64;
     let t_end   = 1e3f64;
+    let log_ratio = (t_end / t_start).ln(); // precompute for temp = t_start * exp(log_ratio * progress)
     let mut twoopt_iters    = 0u64;
     let mut twoopt_accepted = 0u64;
     let mut oropt_iters    = 0u64;
     let mut oropt_accepted = 0u64;
 
+    let mut temp = t_start;
+    let mut iter_count = 0u32;
     loop {
-        let elapsed = timer.elapsed().as_millis() as f64;
-        if elapsed >= sa_end_ms { break; }
-        let progress = (elapsed - sa_start_ms) / sa_duration;
-        let temp = t_start * (t_end / t_start).powf(progress);
+        // Update temperature every 256 iters to avoid per-iter powf/elapsed overhead
+        if iter_count & 255 == 0 {
+            let elapsed = timer.elapsed().as_millis() as f64;
+            if elapsed >= sa_end_ms { break; }
+            let progress = (elapsed - sa_start_ms) / sa_duration;
+            temp = t_start * (log_ratio * progress).exp();
+        }
+        iter_count = iter_count.wrapping_add(1);
 
         let l = 1 + rng.next_usize(n2 - 2);
 
