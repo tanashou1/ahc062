@@ -276,12 +276,15 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                     let wseg = wsum[r + 1] - wsum[l];
                     let delta = lr_sum * sum_seg - 2 * wseg;
 
-                    if delta >= 0 || rng.next_f64() < (delta as f64 / temp).exp() {
+                    let accept = delta >= 0 || { let r = delta as f64 / temp; r > -30.0 && rng.next_f64() < r.exp() };
+                    if accept {
                         path[l..=r].reverse();
                         a_val[l..=r].reverse();
-                        for i in l..=r { pos_in_path[path[i].0][path[i].1] = i; }
-                        for i in l..=r { psum[i + 1] = psum[i] + a_val[i]; }
-                        for i in l..=r { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
+                        for i in l..=r {
+                            pos_in_path[path[i].0][path[i].1] = i;
+                            psum[i + 1] = psum[i] + a_val[i];
+                            wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
+                        }
                         twoopt_accepted += 1;
                     }
                     twoopt_iters += 1;
@@ -315,7 +318,8 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                         delta += (p + i) as i64 * (a_val[l + k - 1 - i] - a_val[p + i]);
                     }
 
-                    if delta >= 0 || rng.next_f64() < (delta as f64 / temp).exp() {
+                    let accept = delta >= 0 || { let r = delta as f64 / temp; r > -30.0 && rng.next_f64() < r.exp() };
+                    if accept {
                         buf[..k].copy_from_slice(&path[l..=m]);
                         for i in 0..k {
                             path[l + i] = path[p + k - 1 - i];
@@ -325,19 +329,22 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                             path[p + i] = buf[k - 1 - i];
                             a_val[p + i] = a[buf[k - 1 - i].0][buf[k - 1 - i].1];
                         }
-                        for i in l..=q { pos_in_path[path[i].0][path[i].1] = i; }
-                        for i in l..=q { psum[i + 1] = psum[i] + a_val[i]; }
-                        for i in l..=q { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
+                        for i in l..=q {
+                            pos_in_path[path[i].0][path[i].1] = i;
+                            psum[i + 1] = psum[i] + a_val[i];
+                            wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
+                        }
                     }
                     break;
                 }
             }
         } else if roll <= 10 {
-            // ── or-opt-rev: [l..=m] を reversed で p の後ろへ移動 (右のみ) ──
+            // ── or-opt-rev: [l..=m] を reversed で p の後ろへ移動 (左右) ──
             // 条件1: king_adj(path[l-1], path[m+1]) ← outer loop 保証
             // 条件2: king_adj(path[p], path[m])    ← inner loop (path[m] の隣接)
             // 条件3: king_adj(path[l], path[p+1])  ← explicit check
-            // delta = -k*sum_C + (d-k+1+2m)*sum_B - 2*wseg_B
+            // 右: delta = -k*sum_C + (d-k+1+2m)*sum_B - 2*wseg_B  (d=p-m)
+            // 左: delta = k*sum_F + (-d_l-k+1+2m)*sum_B - 2*wseg_B (d_l=l-1-p)
             let (pr, pc) = path[l - 1];
             'orrev: for dr in -1i64..=1 {
                 for dc in -1i64..=1 {
@@ -359,34 +366,69 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                             let nc2 = mc as i64 + dc2;
                             if nr2 < 0 || nr2 >= rows as i64 || nc2 < 0 || nc2 >= cols as i64 { continue; }
                             let p = pos_in_path[nr2 as usize][nc2 as usize];
-                            if p <= m { continue; } // right only
+                            let is_right = p > m;
+                            let is_left  = p + 1 < l; // p < l-1
+                            if !is_right && !is_left { continue; }
 
                             // 条件3: king_adj(path[l], path[p+1])
-                            if p + 1 < n2 && !king_adj(path[l], path[p + 1]) { continue; }
+                            if is_right {
+                                if p + 1 < n2 && !king_adj(path[l], path[p + 1]) { continue; }
+                            } else {
+                                if !king_adj(path[l], path[p + 1]) { continue; }
+                            }
 
-                            let sum_B  = psum[m + 1] - psum[l];
-                            let sum_C  = psum[p + 1] - psum[mp1];
-                            let wseg_B = wsum[m + 1] - wsum[l];
-                            let d = (p - m) as i64;
-                            let delta = -(k as i64) * sum_C
-                                + (d - k as i64 + 1 + 2 * m as i64) * sum_B
-                                - 2 * wseg_B;
+                            let sum_b  = psum[m + 1] - psum[l];
+                            let wseg_b = wsum[m + 1] - wsum[l];
+                            let delta = if is_right {
+                                let sum_c = psum[p + 1] - psum[mp1];
+                                let d = (p - m) as i64;
+                                -(k as i64) * sum_c
+                                    + (d - k as i64 + 1 + 2 * m as i64) * sum_b
+                                    - 2 * wseg_b
+                            } else {
+                                let sum_f = psum[l] - psum[p + 1];
+                                let d_l = (l - 1 - p) as i64;
+                                k as i64 * sum_f
+                                    + (-d_l - k as i64 + 1 + 2 * m as i64) * sum_b
+                                    - 2 * wseg_b
+                            };
 
-                            if delta >= 0 || rng.next_f64() < (delta as f64 / temp).exp() {
+                            let accept = delta >= 0 || { let r = delta as f64 / temp; r > -30.0 && rng.next_f64() < r.exp() };
+                            if accept {
                                 buf[..k].copy_from_slice(&path[l..=m]);
-                                let new_start = p - k + 1;
-                                for i in l..new_start {
-                                    path[i] = path[i + k];
-                                    a_val[i] = a_val[i + k];
-                                    pos_in_path[path[i].0][path[i].1] = i;
+                                if is_right {
+                                    let new_start = p - k + 1;
+                                    for i in l..new_start {
+                                        path[i] = path[i + k];
+                                        a_val[i] = a_val[i + k];
+                                        pos_in_path[path[i].0][path[i].1] = i;
+                                    }
+                                    for i in 0..k {
+                                        path[new_start + i] = buf[k - 1 - i];
+                                        a_val[new_start + i] = a[buf[k - 1 - i].0][buf[k - 1 - i].1];
+                                        pos_in_path[path[new_start + i].0][path[new_start + i].1] = new_start + i;
+                                    }
+                                    for i in l..=p {
+                                        psum[i + 1] = psum[i] + a_val[i];
+                                        wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
+                                    }
+                                } else {
+                                    let d_sz = l - 1 - p;
+                                    for i in (0..d_sz).rev() {
+                                        path[p + 1 + k + i] = path[p + 1 + i];
+                                        a_val[p + 1 + k + i] = a_val[p + 1 + i];
+                                        pos_in_path[path[p + 1 + k + i].0][path[p + 1 + k + i].1] = p + 1 + k + i;
+                                    }
+                                    for i in 0..k {
+                                        path[p + 1 + i] = buf[k - 1 - i];
+                                        a_val[p + 1 + i] = a[buf[k - 1 - i].0][buf[k - 1 - i].1];
+                                        pos_in_path[path[p + 1 + i].0][path[p + 1 + i].1] = p + 1 + i;
+                                    }
+                                    for i in p+1..=m {
+                                        psum[i + 1] = psum[i] + a_val[i];
+                                        wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
+                                    }
                                 }
-                                for i in 0..k {
-                                    path[new_start + i] = buf[k - 1 - i];
-                                    a_val[new_start + i] = a[buf[k - 1 - i].0][buf[k - 1 - i].1];
-                                    pos_in_path[path[new_start + i].0][path[new_start + i].1] = new_start + i;
-                                }
-                                for i in l..=p { psum[i + 1] = psum[i] + a_val[i]; }
-                                for i in l..=p { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
                                 oropt_accepted += 1;
                                 break 'orrev;
                             }
@@ -443,10 +485,10 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                                 k as i64 * sum_inter - d as i64 * sum_seg1
                             };
 
-                            if delta >= 0 || rng.next_f64() < (delta as f64 / temp).exp() {
+                            let accept = delta >= 0 || { let r = delta as f64 / temp; r > -30.0 && rng.next_f64() < r.exp() };
+                            if accept {
                                 buf[..k].copy_from_slice(&path[l..=m]);
                                 if is_right {
-                                    // rotate_left(k): 中間 [m+1..q] → [l..q-k], セグメント → [q-k+1..q]
                                     let new_start = q - k + 1;
                                     for i in l..new_start {
                                         path[i] = path[i + k];
@@ -458,10 +500,11 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                                         a_val[new_start + i] = a[buf[i].0][buf[i].1];
                                         pos_in_path[path[new_start + i].0][path[new_start + i].1] = new_start + i;
                                     }
-                                    for i in l..=q { psum[i + 1] = psum[i] + a_val[i]; }
-                                    for i in l..=q { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
+                                    for i in l..=q {
+                                        psum[i + 1] = psum[i] + a_val[i];
+                                        wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
+                                    }
                                 } else {
-                                    // rotate_right(k): 中間 [q+1..l-1] → [q+k+1..m], セグメント → [q+1..q+k]
                                     let d = l - 1 - q;
                                     for i in (0..d).rev() {
                                         path[q + 1 + k + i] = path[q + 1 + i];
@@ -473,8 +516,10 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                                         a_val[q + 1 + i] = a[buf[i].0][buf[i].1];
                                         pos_in_path[path[q + 1 + i].0][path[q + 1 + i].1] = q + 1 + i;
                                     }
-                                    for i in q+1..=m { psum[i + 1] = psum[i] + a_val[i]; }
-                                    for i in q+1..=m { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
+                                    for i in q+1..=m {
+                                        psum[i + 1] = psum[i] + a_val[i];
+                                        wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
+                                    }
                                 }
                                 oropt_accepted += 1;
                                 break 'oropt;
