@@ -3,7 +3,7 @@ use std::time::Instant;
 
 const TIME_LIMIT_MS: u64 = 2950;
 
-type Pos = (usize, usize);
+type Pos = (u8, u8);
 
 struct Rng {
     state: u64,
@@ -16,7 +16,11 @@ impl Rng {
         self.state ^= self.state << 17;
         self.state
     }
-    fn next_usize(&mut self, n: usize) -> usize { (self.next_u64() % n as u64) as usize }
+    #[inline(always)]
+    fn next_usize(&mut self, n: usize) -> usize {
+        // Avoid slow DIVQ: use 128-bit multiply (MUL + high bits) instead
+        ((self.next_u64() as u128 * n as u128) >> 64) as usize
+    }
     fn next_f64(&mut self) -> f64 { (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64) }
 }
 
@@ -50,9 +54,9 @@ fn snake_path(n: usize) -> Vec<Pos> {
     let mut path = Vec::with_capacity(n * n);
     for i in 0..n {
         if i % 2 == 0 {
-            for j in 0..n { path.push((i, j)); }
+            for j in 0..n { path.push((i as u8, j as u8)); }
         } else {
-            for j in (0..n).rev() { path.push((i, j)); }
+            for j in (0..n).rev() { path.push((i as u8, j as u8)); }
         }
     }
     path
@@ -64,9 +68,9 @@ fn sa_block_swap(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, t
     let cols = a[0].len();
     let max_k = n;
 
-    let mut pos_in_path = vec![vec![0usize; cols]; rows];
-    for (t, &(r, c)) in path.iter().enumerate() { pos_in_path[r][c] = t; }
-    let mut a_val: Vec<i64> = path.iter().map(|&(r, c)| a[r][c]).collect();
+    let mut pos_in_path = vec![0u16; rows * 256];
+    for (t, &(r, c)) in path.iter().enumerate() { pos_in_path[r as usize * 256 + c as usize] = t as u16; }
+    let mut a_val: Vec<i64> = path.iter().map(|&(r, c)| a[r as usize][c as usize]).collect();
 
     let sa_start_ms = timer.elapsed().as_millis() as f64;
     let sa_end_ms   = end_ms as f64;
@@ -77,7 +81,7 @@ fn sa_block_swap(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, t
     let mut bs_accepted = 0u64;
     let mut fo_iters    = 0u64;
     let mut fo_accepted = 0u64;
-    let mut buf = vec![(0usize, 0usize); max_k];
+    let mut buf = vec![(0u8, 0u8); max_k];
 
     loop {
         let elapsed = timer.elapsed().as_millis() as f64;
@@ -92,28 +96,28 @@ fn sa_block_swap(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, t
             let a_col = rng.next_usize(n);
             let k = 1 + rng.next_usize((n - a_col).min(max_k));
 
-            let l1 = pos_in_path[r1][a_col];
+            let l1 = pos_in_path[r1 * 256 + a_col] as usize;
             let dir1: i64 = if k > 1 {
-                let nxt = pos_in_path[r1][a_col + 1];
+                let nxt = pos_in_path[r1 * 256 + a_col + 1] as usize;
                 if nxt == l1 + 1 { 1 } else if nxt + 1 == l1 { -1 } else { continue }
             } else { 1 };
             let mut ok = true;
             for i in 2..k {
                 let exp = l1 as i64 + dir1 * i as i64;
-                if exp < 0 || pos_in_path[r1][a_col + i] as i64 != exp { ok = false; break; }
+                if exp < 0 || pos_in_path[r1 * 256 + a_col + i] as i64 != exp { ok = false; break; }
             }
             if !ok { continue; }
             let (la, ma) = if dir1 > 0 { (l1, l1 + k - 1) } else { (l1 + 1 - k, l1) };
 
-            let l2 = pos_in_path[r2][a_col];
+            let l2 = pos_in_path[r2 * 256 + a_col] as usize;
             let dir2: i64 = if k > 1 {
-                let nxt = pos_in_path[r2][a_col + 1];
+                let nxt = pos_in_path[r2 * 256 + a_col + 1] as usize;
                 if nxt == l2 + 1 { 1 } else if nxt + 1 == l2 { -1 } else { continue }
             } else { 1 };
             let mut ok = true;
             for i in 2..k {
                 let exp = l2 as i64 + dir2 * i as i64;
-                if exp < 0 || pos_in_path[r2][a_col + i] as i64 != exp { ok = false; break; }
+                if exp < 0 || pos_in_path[r2 * 256 + a_col + i] as i64 != exp { ok = false; break; }
             }
             if !ok { continue; }
             let (lb, qb) = if dir2 > 0 { (l2, l2 + k - 1) } else { (l2 + 1 - k, l2) };
@@ -139,9 +143,9 @@ fn sa_block_swap(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, t
                 }
                 for i in 0..k {
                     path[p + i] = buf[k - 1 - i];
-                    a_val[p + i] = a[buf[k - 1 - i].0][buf[k - 1 - i].1];
+                    a_val[p + i] = a[buf[k - 1 - i].0 as usize][buf[k - 1 - i].1 as usize];
                 }
-                for i in l..=q { pos_in_path[path[i].0][path[i].1] = i; }
+                for i in l..=q { pos_in_path[path[i].0 as usize * 256 + path[i].1 as usize] = i as u16; }
                 fo_accepted += 1;
             }
             continue;
@@ -156,7 +160,7 @@ fn sa_block_swap(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, t
                 let nr = pr as i64 + dr;
                 let nc = pc as i64 + dc;
                 if nr < 0 || nr >= rows as i64 || nc < 0 || nc >= cols as i64 { continue; }
-                let q = pos_in_path[nr as usize][nc as usize];
+                let q = pos_in_path[nr as usize * 256 + nc as usize] as usize;
                 if q + 1 >= n2 || q <= l { continue; }
                 if !king_adj(path[l], path[q + 1]) { continue; }
 
@@ -183,9 +187,9 @@ fn sa_block_swap(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, t
                     }
                     for i in 0..k {
                         path[p + i] = buf[k - 1 - i];
-                        a_val[p + i] = a[buf[k-1-i].0][buf[k-1-i].1];
+                        a_val[p + i] = a[buf[k-1-i].0 as usize][buf[k-1-i].1 as usize];
                     }
-                    for i in l..=q { pos_in_path[path[i].0][path[i].1] = i; }
+                    for i in l..=q { pos_in_path[path[i].0 as usize * 256 + path[i].1 as usize] = i as u16; }
                     bs_accepted += 1;
                 }
                 bs_iters += 1;
@@ -225,9 +229,9 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let oropt_max_dist = n2; // or-opt で q-m の最大距離 (unlimited)
     let max_k = n;              // or-opt で移動するセグメントの最大長
 
-    let mut pos_in_path = vec![vec![0usize; cols]; rows];
-    for (t, &(r, c)) in path.iter().enumerate() { pos_in_path[r][c] = t; }
-    let mut a_val: Vec<i64> = path.iter().map(|&(r, c)| a[r][c]).collect();
+    let mut pos_in_path = vec![0u16; rows * 256];
+    for (t, &(r, c)) in path.iter().enumerate() { pos_in_path[r as usize * 256 + c as usize] = t as u16; }
+    let mut a_val: Vec<i64> = path.iter().map(|&(r, c)| a[r as usize][c as usize]).collect();
 
     // Prefix sum: psum[i] = Σa_val[0..i]
     let mut psum = vec![0i64; n2 + 1];
@@ -237,7 +241,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let mut wsum = vec![0i64; n2 + 1];
     for i in 0..n2 { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
 
-    let mut buf = vec![(0usize, 0usize); max_k];
+    let mut buf = vec![(0u8, 0u8); max_k];
 
     let sa_start_ms = timer.elapsed().as_millis() as f64;
     let sa_end_ms   = TIME_LIMIT_MS as f64;
@@ -247,7 +251,8 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let log_ratio = (t_end / t_start).ln();
     // Iterated SA: restart from best at midpoint with moderate temperature
     let t_start2   = 3e5f64;
-    let log_ratio2 = (t_end / t_start2).ln();
+    let t_end2     = 1e4f64;
+    let log_ratio2 = (t_end2 / t_start2).ln();
     let midpoint_ms = sa_start_ms + sa_duration * 0.4;
     let mut best_raw: i64 = wsum[n2];
     let mut best_path_saved: Vec<Pos> = path.clone();
@@ -280,7 +285,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                 if best_raw > wsum[n2] {
                     path.copy_from_slice(&best_path_saved);
                     a_val.copy_from_slice(&best_a_val_saved);
-                    for (t, &(r, c)) in path.iter().enumerate() { pos_in_path[r][c] = t; }
+                    for (t, &(r, c)) in path.iter().enumerate() { pos_in_path[r as usize * 256 + c as usize] = t as u16; }
                     psum[0] = 0; wsum[0] = 0;
                     for i in 0..n2 {
                         psum[i + 1] = psum[i] + a_val[i];
@@ -311,7 +316,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                     let nr = pr as i64 + dr;
                     let nc = pc as i64 + dc;
                     if nr < 0 || nr >= rows as i64 || nc < 0 || nc >= cols as i64 { continue; }
-                    let r = pos_in_path[nr as usize][nc as usize];
+                    let r = pos_in_path[nr as usize * 256 + nc as usize] as usize;
                     if r <= l { continue; }
                     if r + 1 < n2 && !king_adj(path[l], path[r + 1]) { continue; }
 
@@ -325,7 +330,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                         path[l..=r].reverse();
                         a_val[l..=r].reverse();
                         for i in l..=r {
-                            pos_in_path[path[i].0][path[i].1] = i;
+                            pos_in_path[path[i].0 as usize * 256 + path[i].1 as usize] = i as u16;
                             psum[i + 1] = psum[i] + a_val[i];
                             wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
                         }
@@ -343,7 +348,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                     let nr = pr as i64 + dr;
                     let nc = pc as i64 + dc;
                     if nr < 0 || nr >= rows as i64 || nc < 0 || nc >= cols as i64 { continue; }
-                    let q = pos_in_path[nr as usize][nc as usize];
+                    let q = pos_in_path[nr as usize * 256 + nc as usize] as usize;
                     if q + 1 >= n2 || q <= l { continue; }
                     if !king_adj(path[l], path[q + 1]) { continue; }
 
@@ -379,10 +384,10 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                         }
                         for i in 0..k {
                             path[p + i] = buf[k - 1 - i];
-                            a_val[p + i] = a[buf[k - 1 - i].0][buf[k - 1 - i].1];
+                            a_val[p + i] = a[buf[k - 1 - i].0 as usize][buf[k - 1 - i].1 as usize];
                         }
                         for i in l..=q {
-                            pos_in_path[path[i].0][path[i].1] = i;
+                            pos_in_path[path[i].0 as usize * 256 + path[i].1 as usize] = i as u16;
                             psum[i + 1] = psum[i] + a_val[i];
                             wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
                         }
@@ -404,7 +409,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                     let nr = pr as i64 + dr;
                     let nc = pc as i64 + dc;
                     if nr < 0 || nr >= rows as i64 || nc < 0 || nc >= cols as i64 { continue; }
-                    let mp1 = pos_in_path[nr as usize][nc as usize];
+                    let mp1 = pos_in_path[nr as usize * 256 + nc as usize] as usize;
                     if mp1 <= l || mp1 >= n2 { continue; }
                     let k = mp1 - l;
                     if k > max_k { continue; }
@@ -417,7 +422,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                             let nr2 = mr as i64 + dr2;
                             let nc2 = mc as i64 + dc2;
                             if nr2 < 0 || nr2 >= rows as i64 || nc2 < 0 || nc2 >= cols as i64 { continue; }
-                            let p = pos_in_path[nr2 as usize][nc2 as usize];
+                            let p = pos_in_path[nr2 as usize * 256 + nc2 as usize] as usize;
                             let is_right = p > m;
                             let is_left  = p + 1 < l; // p < l-1
                             if !is_right && !is_left { continue; }
@@ -450,33 +455,32 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                                 buf[..k].copy_from_slice(&path[l..=m]);
                                 if is_right {
                                     let new_start = p - k + 1;
-                                    for i in l..new_start {
-                                        path[i] = path[i + k];
-                                        a_val[i] = a_val[i + k];
-                                        pos_in_path[path[i].0][path[i].1] = i;
-                                    }
+                                    // fast shift [m+1..=p] → [l..=p-k]
+                                    path.copy_within(m+1..=p, l);
+                                    a_val.copy_within(m+1..=p, l);
+                                    // place reversed segment at [new_start..=p]
                                     for i in 0..k {
                                         path[new_start + i] = buf[k - 1 - i];
-                                        a_val[new_start + i] = a[buf[k - 1 - i].0][buf[k - 1 - i].1];
-                                        pos_in_path[path[new_start + i].0][path[new_start + i].1] = new_start + i;
+                                        a_val[new_start + i] = a[buf[k - 1 - i].0 as usize][buf[k - 1 - i].1 as usize];
                                     }
+                                    // single pass: pos_in_path + psum + wsum
                                     for i in l..=p {
+                                        pos_in_path[path[i].0 as usize * 256 + path[i].1 as usize] = i as u16;
                                         psum[i + 1] = psum[i] + a_val[i];
                                         wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
                                     }
                                 } else {
-                                    let d_sz = l - 1 - p;
-                                    for i in (0..d_sz).rev() {
-                                        path[p + 1 + k + i] = path[p + 1 + i];
-                                        a_val[p + 1 + k + i] = a_val[p + 1 + i];
-                                        pos_in_path[path[p + 1 + k + i].0][path[p + 1 + k + i].1] = p + 1 + k + i;
-                                    }
+                                    // fast shift [p+1..l] → [p+1+k..=m]
+                                    path.copy_within(p+1..l, p+1+k);
+                                    a_val.copy_within(p+1..l, p+1+k);
+                                    // place reversed segment at [p+1..=p+k]
                                     for i in 0..k {
                                         path[p + 1 + i] = buf[k - 1 - i];
-                                        a_val[p + 1 + i] = a[buf[k - 1 - i].0][buf[k - 1 - i].1];
-                                        pos_in_path[path[p + 1 + i].0][path[p + 1 + i].1] = p + 1 + i;
+                                        a_val[p + 1 + i] = a[buf[k - 1 - i].0 as usize][buf[k - 1 - i].1 as usize];
                                     }
+                                    // single pass: pos_in_path + psum + wsum
                                     for i in p+1..=m {
+                                        pos_in_path[path[i].0 as usize * 256 + path[i].1 as usize] = i as u16;
                                         psum[i + 1] = psum[i] + a_val[i];
                                         wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
                                     }
@@ -498,7 +502,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                     let nr = pr as i64 + dr;
                     let nc = pc as i64 + dc;
                     if nr < 0 || nr >= rows as i64 || nc < 0 || nc >= cols as i64 { continue; }
-                    let mp1 = pos_in_path[nr as usize][nc as usize];
+                    let mp1 = pos_in_path[nr as usize * 256 + nc as usize] as usize;
                     if mp1 <= l || mp1 >= n2 { continue; }
                     let k = mp1 - l;
                     if k > max_k { continue; }
@@ -512,7 +516,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                             let nr2 = lr as i64 + dr2;
                             let nc2 = lc as i64 + dc2;
                             if nr2 < 0 || nr2 >= rows as i64 || nc2 < 0 || nc2 >= cols as i64 { continue; }
-                            let q = pos_in_path[nr2 as usize][nc2 as usize];
+                            let q = pos_in_path[nr2 as usize * 256 + nc2 as usize] as usize;
                             let is_right = q > m && q - m <= oropt_max_dist;
                             let is_left  = q + 1 < l; // q < l-1
                             if !is_right && !is_left { continue; }
@@ -542,33 +546,28 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                                 buf[..k].copy_from_slice(&path[l..=m]);
                                 if is_right {
                                     let new_start = q - k + 1;
-                                    for i in l..new_start {
-                                        path[i] = path[i + k];
-                                        a_val[i] = a_val[i + k];
-                                        pos_in_path[path[i].0][path[i].1] = i;
-                                    }
-                                    for i in 0..k {
-                                        path[new_start + i] = buf[i];
-                                        a_val[new_start + i] = a[buf[i].0][buf[i].1];
-                                        pos_in_path[path[new_start + i].0][path[new_start + i].1] = new_start + i;
-                                    }
+                                    // fast shift [m+1..=q] → [l..=q-k]
+                                    path.copy_within(m+1..=q, l);
+                                    a_val.copy_within(m+1..=q, l);
+                                    // place segment at [new_start..=q]
+                                    path[new_start..=q].copy_from_slice(&buf[..k]);
+                                    for i in 0..k { a_val[new_start + i] = a[buf[i].0 as usize][buf[i].1 as usize]; }
+                                    // single pass: pos_in_path + psum + wsum
                                     for i in l..=q {
+                                        pos_in_path[path[i].0 as usize * 256 + path[i].1 as usize] = i as u16;
                                         psum[i + 1] = psum[i] + a_val[i];
                                         wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
                                     }
                                 } else {
-                                    let d = l - 1 - q;
-                                    for i in (0..d).rev() {
-                                        path[q + 1 + k + i] = path[q + 1 + i];
-                                        a_val[q + 1 + k + i] = a_val[q + 1 + i];
-                                        pos_in_path[path[q + 1 + k + i].0][path[q + 1 + k + i].1] = q + 1 + k + i;
-                                    }
-                                    for i in 0..k {
-                                        path[q + 1 + i] = buf[i];
-                                        a_val[q + 1 + i] = a[buf[i].0][buf[i].1];
-                                        pos_in_path[path[q + 1 + i].0][path[q + 1 + i].1] = q + 1 + i;
-                                    }
+                                    // fast shift [q+1..l] → [q+1+k..=m]
+                                    path.copy_within(q+1..l, q+1+k);
+                                    a_val.copy_within(q+1..l, q+1+k);
+                                    // place segment at [q+1..=q+k]
+                                    path[q+1..=q+k].copy_from_slice(&buf[..k]);
+                                    for i in 0..k { a_val[q + 1 + i] = a[buf[i].0 as usize][buf[i].1 as usize]; }
+                                    // single pass: pos_in_path + psum + wsum
                                     for i in q+1..=m {
+                                        pos_in_path[path[i].0 as usize * 256 + path[i].1 as usize] = i as u16;
                                         psum[i + 1] = psum[i] + a_val[i];
                                         wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
                                     }
@@ -582,6 +581,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
             }
         }
     }
+    eprintln!("total_iters={iter_count}");
     eprintln!("twoopt: iters={twoopt_iters} acc={twoopt_accepted}");
     eprintln!("oropt:  iters={oropt_iters} acc={oropt_accepted}");
 }
@@ -594,12 +594,12 @@ fn king_adj(a: Pos, b: Pos) -> bool {
 fn validate_path(path: &[Pos], n: usize) {
     assert_eq!(path.len(), n * n);
     let mut used = vec![vec![false; n]; n];
-    for &(r, c) in path { assert!(!used[r][c]); used[r][c] = true; }
+    for &(r, c) in path { assert!(!used[r as usize][c as usize]); used[r as usize][c as usize] = true; }
     for i in 1..path.len() { assert!(king_adj(path[i-1], path[i]), "non-adjacent at {i}"); }
 }
 
 fn raw_score(a: &[Vec<i64>], path: &[Pos]) -> i64 {
-    path.iter().enumerate().map(|(t, &(r, c))| t as i64 * a[r][c]).sum()
+    path.iter().enumerate().map(|(t, &(r, c))| t as i64 * a[r as usize][c as usize]).sum()
 }
 
 fn display_score(raw: i64, n2: i64) -> i64 { (raw + n2 / 2) / n2 }
