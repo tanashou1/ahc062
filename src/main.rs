@@ -116,8 +116,14 @@ fn greedy_from(n: usize, a: &[Vec<i64>], start_r: usize, start_c: usize) -> Opti
 // Try greedy from several starting cells, return best init_score path.
 // Falls back to snake_path if all greedy attempts fail.
 fn greedy_path(n: usize, a: &[Vec<i64>]) -> Vec<Pos> {
-    // Start candidates: cell with min A-value, the 4 corners, center
-    let mut candidates = vec![];
+    // Collect starting candidates: 4 corners + center + min-A cell
+    let mut candidates: Vec<(usize, usize)> = vec![];
+    candidates.push((0, 0));
+    candidates.push((0, n-1));
+    candidates.push((n-1, 0));
+    candidates.push((n-1, n-1));
+    candidates.push((n/2, n/2));
+    // Cell with minimum A-value
     let mut min_a = i64::MAX;
     let mut min_r = 0;
     let mut min_c = 0;
@@ -127,11 +133,6 @@ fn greedy_path(n: usize, a: &[Vec<i64>]) -> Vec<Pos> {
         }
     }
     candidates.push((min_r, min_c));
-    candidates.push((0, 0));
-    candidates.push((0, n-1));
-    candidates.push((n-1, 0));
-    candidates.push((n-1, n-1));
-    candidates.push((n/2, n/2));
 
     let mut best_path: Option<Vec<Pos>> = None;
     let mut best_raw: i64 = i64::MIN;
