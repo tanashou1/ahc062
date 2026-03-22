@@ -36,7 +36,7 @@ fn main() {
     let raw = raw_score(&a, &path);
     eprintln!("init_score={}", display_score(raw, (n * n) as i64));
 
-    let phase1_end = 600u64;
+    let phase1_end = 150u64;
     sa_block_swap(&a, &mut path, n, &mut Rng::new(42), timer, phase1_end);
     sa_twoopt(&a, &mut path, n, &mut Rng::new(43), timer);
 
