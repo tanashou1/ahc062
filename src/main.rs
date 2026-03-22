@@ -233,6 +233,10 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let mut psum = vec![0i64; n2 + 1];
     for i in 0..n2 { psum[i + 1] = psum[i] + a_val[i]; }
 
+    // Weighted prefix sum: wsum[i] = Σ_{j<i} j * a_val[j]  (for O(1) 2-opt delta)
+    let mut wsum = vec![0i64; n2 + 1];
+    for i in 0..n2 { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
+
     let mut buf = vec![(0usize, 0usize); max_k];
 
     let sa_start_ms = timer.elapsed().as_millis() as f64;
@@ -254,7 +258,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
         let l = 1 + rng.next_usize(n2 - 2);
 
         let roll = rng.next_u64() % 16;
-        if roll == 0 {  // 6.25% 2-opt, 12.5% block_swap, 81.25% or-opt
+        if roll == 0 {  // 6.25% 2-opt
             // ── 2-opt ────────────────────────────────────────────────────────
             let (pr, pc) = path[l - 1];
             for dr in -1i64..=1 {
@@ -268,15 +272,16 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                     if r + 1 < n2 && !king_adj(path[l], path[r + 1]) { continue; }
 
                     let lr_sum = (l + r) as i64;
-                    let mut delta: i64 = 0;
-                    for j in l..=r { delta += (lr_sum - 2 * j as i64) * a_val[j]; }
+                    let sum_seg = psum[r + 1] - psum[l];
+                    let wseg = wsum[r + 1] - wsum[l];
+                    let delta = lr_sum * sum_seg - 2 * wseg;
 
                     if delta >= 0 || rng.next_f64() < (delta as f64 / temp).exp() {
                         path[l..=r].reverse();
                         a_val[l..=r].reverse();
                         for i in l..=r { pos_in_path[path[i].0][path[i].1] = i; }
-                        // update prefix sums for changed range [l..=r]
                         for i in l..=r { psum[i + 1] = psum[i] + a_val[i]; }
+                        for i in l..=r { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
                         twoopt_accepted += 1;
                     }
                     twoopt_iters += 1;
@@ -322,6 +327,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                         }
                         for i in l..=q { pos_in_path[path[i].0][path[i].1] = i; }
                         for i in l..=q { psum[i + 1] = psum[i] + a_val[i]; }
+                        for i in l..=q { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
                     }
                     break;
                 }
@@ -391,6 +397,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                                         pos_in_path[path[new_start + i].0][path[new_start + i].1] = new_start + i;
                                     }
                                     for i in l..=q { psum[i + 1] = psum[i] + a_val[i]; }
+                                    for i in l..=q { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
                                 } else {
                                     // rotate_right(k): 中間 [q+1..l-1] → [q+k+1..m], セグメント → [q+1..q+k]
                                     let d = l - 1 - q;
@@ -405,6 +412,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                                         pos_in_path[path[q + 1 + i].0][path[q + 1 + i].1] = q + 1 + i;
                                     }
                                     for i in q+1..=m { psum[i + 1] = psum[i] + a_val[i]; }
+                                    for i in q+1..=m { wsum[i + 1] = wsum[i] + i as i64 * a_val[i]; }
                                 }
                                 oropt_accepted += 1;
                                 break 'oropt;
