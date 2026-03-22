@@ -250,10 +250,10 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let t_end   = 3e4f64;
     let log_ratio = (t_end / t_start).ln();
     // Iterated SA: restart from best at midpoint with moderate temperature
-    let t_start2   = 3e5f64;
-    let t_end2     = 1e4f64;
+    let t_start2   = 1e6f64;
+    let t_end2     = 8e3f64;
     let log_ratio2 = (t_end2 / t_start2).ln();
-    let midpoint_ms = sa_start_ms + sa_duration * 0.4;
+    let midpoint_ms = sa_start_ms + sa_duration * 0.70;
     let mut best_raw: i64 = wsum[n2];
     let mut best_path_saved: Vec<Pos> = path.clone();
     let mut best_a_val_saved: Vec<i64> = a_val.clone();
