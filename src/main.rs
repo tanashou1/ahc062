@@ -36,7 +36,7 @@ fn main() {
         for x in row { *x = iter.next().unwrap().parse().unwrap(); }
     }
 
-    let mut path = snake_path(n);
+    let mut path = greedy_path(n, &a);
     let raw = raw_score(&a, &path);
     eprintln!("init_score={}", display_score(raw, (n * n) as i64));
 
@@ -62,6 +62,89 @@ fn snake_path(n: usize) -> Vec<Pos> {
     path
 }
 
+// Warnsdorff-guided greedy from a given starting cell.
+// At each step: primary = fewest unvisited king-neighbors (Warnsdorff degree),
+// tiebreak = smallest A-value (visit small-A cells early).
+fn greedy_from(n: usize, a: &[Vec<i64>], start_r: usize, start_c: usize) -> Option<Vec<Pos>> {
+    let n2 = n * n;
+    let mut path = Vec::with_capacity(n2);
+    let mut visited = vec![false; n2];
+    let mut r = start_r;
+    let mut c = start_c;
+    path.push((r as u8, c as u8));
+    visited[r * n + c] = true;
+
+    for _ in 1..n2 {
+        let mut best_deg = usize::MAX;
+        let mut best_a = i64::MAX;
+        let mut best_r = 0usize;
+        let mut best_c = 0usize;
+        let mut found = false;
+
+        for dr in -1i64..=1 {
+            for dc in -1i64..=1 {
+                if dr == 0 && dc == 0 { continue; }
+                let nr = r as i64 + dr;
+                let nc = c as i64 + dc;
+                if nr < 0 || nr >= n as i64 || nc < 0 || nc >= n as i64 { continue; }
+                let (nr, nc) = (nr as usize, nc as usize);
+                if visited[nr * n + nc] { continue; }
+                let mut deg = 0usize;
+                for dr2 in -1i64..=1 {
+                    for dc2 in -1i64..=1 {
+                        if dr2 == 0 && dc2 == 0 { continue; }
+                        let nr2 = nr as i64 + dr2;
+                        let nc2 = nc as i64 + dc2;
+                        if nr2 < 0 || nr2 >= n as i64 || nc2 < 0 || nc2 >= n as i64 { continue; }
+                        if !visited[nr2 as usize * n + nc2 as usize] { deg += 1; }
+                    }
+                }
+                if deg < best_deg || (deg == best_deg && a[nr][nc] < best_a) {
+                    best_deg = deg; best_a = a[nr][nc];
+                    best_r = nr; best_c = nc; found = true;
+                }
+            }
+        }
+        if !found { return None; }
+        r = best_r; c = best_c;
+        path.push((r as u8, c as u8));
+        visited[r * n + c] = true;
+    }
+    Some(path)
+}
+
+// Try greedy from several starting cells, return best init_score path.
+// Falls back to snake_path if all greedy attempts fail.
+fn greedy_path(n: usize, a: &[Vec<i64>]) -> Vec<Pos> {
+    // Start candidates: cell with min A-value, the 4 corners, center
+    let mut candidates = vec![];
+    let mut min_a = i64::MAX;
+    let mut min_r = 0;
+    let mut min_c = 0;
+    for i in 0..n {
+        for j in 0..n {
+            if a[i][j] < min_a { min_a = a[i][j]; min_r = i; min_c = j; }
+        }
+    }
+    candidates.push((min_r, min_c));
+    candidates.push((0, 0));
+    candidates.push((0, n-1));
+    candidates.push((n-1, 0));
+    candidates.push((n-1, n-1));
+    candidates.push((n/2, n/2));
+
+    let mut best_path: Option<Vec<Pos>> = None;
+    let mut best_raw: i64 = i64::MIN;
+
+    for (sr, sc) in candidates {
+        if let Some(p) = greedy_from(n, a, sr, sc) {
+            let raw: i64 = p.iter().enumerate().map(|(t, &(r, c))| t as i64 * a[r as usize][c as usize]).sum();
+            if raw > best_raw { best_raw = raw; best_path = Some(p); }
+        }
+    }
+    best_path.unwrap_or_else(|| snake_path(n))
+}
+
 fn sa_block_swap(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer: Instant, end_ms: u64) {
     let n2   = path.len();
     let rows = a.len();
@@ -75,8 +158,8 @@ fn sa_block_swap(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, t
     let sa_start_ms = timer.elapsed().as_millis() as f64;
     let sa_end_ms   = end_ms as f64;
     let sa_duration = (sa_end_ms - sa_start_ms).max(1.0);
-    let t_start = 5e7f64;
-    let t_end   = 1e3f64;
+    let t_start = 3e7f64;
+    let t_end   = 1e5f64;
     let mut bs_iters    = 0u64;
     let mut bs_accepted = 0u64;
     let mut fo_iters    = 0u64;
@@ -247,7 +330,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let sa_end_ms   = TIME_LIMIT_MS as f64;
     let sa_duration = (sa_end_ms - sa_start_ms).max(1.0);
     let t_start = 3e7f64;
-    let t_end   = 3e4f64;
+    let t_end   = 1e5f64;
     let log_ratio = (t_end / t_start).ln();
     // Iterated SA: restart from best at midpoint with moderate temperature
     let t_start2   = 1e6f64;
@@ -260,6 +343,9 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let mut restarted = false;
     let mut twoopt_iters    = 0u64;
     let mut twoopt_accepted = 0u64;
+    let mut bswap_iters    = 0u64;
+    let mut bswap_accepted = 0u64;
+    let mut orrev_accepted = 0u64;
     let mut oropt_iters    = 0u64;
     let mut oropt_accepted = 0u64;
 
@@ -375,8 +461,10 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                     let m = l + k - 1;
                     let p = q - k + 1;
 
+                    bswap_iters += 1;
                     let accept = delta >= 0 || { let r = delta as f64 / temp; r > -30.0 && rng.next_f64() < r.exp() };
                     if accept {
+                        bswap_accepted += 1;
                         buf[..k].copy_from_slice(&path[l..=m]);
                         for i in 0..k {
                             path[l + i] = path[p + k - 1 - i];
@@ -485,7 +573,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                                         wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
                                     }
                                 }
-                                oropt_accepted += 1;
+                                orrev_accepted += 1;
                                 break 'orrev;
                             }
                         }
@@ -577,12 +665,16 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                             }
                         }
                     }
+
+
                 }
             }
         }
     }
     eprintln!("total_iters={iter_count}");
     eprintln!("twoopt: iters={twoopt_iters} acc={twoopt_accepted}");
+    eprintln!("bswap:  iters={bswap_iters} acc={bswap_accepted}");
+    eprintln!("orrev:  acc={orrev_accepted}");
     eprintln!("oropt:  iters={oropt_iters} acc={oropt_accepted}");
 }
 
