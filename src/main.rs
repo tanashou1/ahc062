@@ -347,20 +347,28 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                     if q + 1 >= n2 || q <= l { continue; }
                     if !king_adj(path[l], path[q + 1]) { continue; }
 
-                    let k_max = q.min(n2 - 1 - l).min((q - l) / 2);
+                    let k_max = q.min(n2 - 1 - l).min((q - l) / 2).min(3);
                     if k_max == 0 { continue; }
-                    let k = 1 + rng.next_usize(k_max.min(3));
+                    // Try all k in 1..=k_max, pick best delta
+                    let mut best_k = 0usize;
+                    let mut best_delta = i64::MIN;
+                    for k in 1..=k_max {
+                        let m = l + k - 1;
+                        let p = q - k + 1;
+                        if !king_adj(path[p], path[m + 1]) { continue; }
+                        if !king_adj(path[p - 1], path[m]) { continue; }
+                        let mut delta: i64 = 0;
+                        for i in 0..k {
+                            delta += (l + i) as i64 * (a_val[p + k - 1 - i] - a_val[l + i]);
+                            delta += (p + i) as i64 * (a_val[l + k - 1 - i] - a_val[p + i]);
+                        }
+                        if delta > best_delta { best_delta = delta; best_k = k; }
+                    }
+                    if best_k == 0 { break; }
+                    let k = best_k;
+                    let delta = best_delta;
                     let m = l + k - 1;
                     let p = q - k + 1;
-
-                    if !king_adj(path[p], path[m + 1]) { continue; }
-                    if !king_adj(path[p - 1], path[m]) { continue; }
-
-                    let mut delta: i64 = 0;
-                    for i in 0..k {
-                        delta += (l + i) as i64 * (a_val[p + k - 1 - i] - a_val[l + i]);
-                        delta += (p + i) as i64 * (a_val[l + k - 1 - i] - a_val[p + i]);
-                    }
 
                     let accept = delta >= 0 || { let r = delta as f64 / temp; r > -30.0 && rng.next_f64() < r.exp() };
                     if accept {
