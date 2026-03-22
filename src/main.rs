@@ -333,15 +333,19 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let t_start = 3e7f64;
     let t_end   = 1e5f64;
     let log_ratio = (t_end / t_start).ln();
-    // Iterated SA: restart from best at midpoint with moderate temperature
-    let t_start2   = 1e6f64;
-    let t_end2     = 8e3f64;
+    // Iterated SA: two restarts from best
+    let t_start2   = 3e6f64;
+    let t_end2     = 5e4f64;
     let log_ratio2 = (t_end2 / t_start2).ln();
-    let midpoint_ms = sa_start_ms + sa_duration * 0.70;
+    let t_start3   = 8e5f64;
+    let t_end3     = 8e3f64;
+    let log_ratio3 = (t_end3 / t_start3).ln();
+    let restart1_ms = sa_start_ms + sa_duration * 0.55;
+    let restart2_ms = sa_start_ms + sa_duration * 0.80;
     let mut best_raw: i64 = wsum[n2];
     let mut best_path_saved: Vec<Pos> = path.clone();
     let mut best_a_val_saved: Vec<i64> = a_val.clone();
-    let mut restarted = false;
+    let mut restart_phase = 0u32; // 0=phase1, 1=phase2, 2=phase3
     let mut twoopt_iters    = 0u64;
     let mut twoopt_accepted = 0u64;
     let mut bswap_iters    = 0u64;
@@ -366,9 +370,11 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                 best_a_val_saved.copy_from_slice(&a_val);
             }
 
-            // Restart at midpoint: restore best and reheat
-            if !restarted && elapsed >= midpoint_ms {
-                restarted = true;
+            // Restart logic: restore best and reheat at scheduled points
+            let do_restart = (restart_phase == 0 && elapsed >= restart1_ms)
+                          || (restart_phase == 1 && elapsed >= restart2_ms);
+            if do_restart {
+                restart_phase += 1;
                 if best_raw > wsum[n2] {
                     path.copy_from_slice(&best_path_saved);
                     a_val.copy_from_slice(&best_a_val_saved);
@@ -378,15 +384,24 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                         psum[i + 1] = psum[i] + a_val[i];
                         wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
                     }
+                } else {
+                    restart_phase += 1; // skip to next phase if current is already best
                 }
             }
 
-            temp = if !restarted {
-                let progress = (elapsed - sa_start_ms) / (midpoint_ms - sa_start_ms);
-                t_start * (log_ratio * progress.min(1.0)).exp()
-            } else {
-                let progress = (elapsed - midpoint_ms) / (sa_end_ms - midpoint_ms);
-                t_start2 * (log_ratio2 * progress.min(1.0)).exp()
+            temp = match restart_phase {
+                0 => {
+                    let progress = (elapsed - sa_start_ms) / (restart1_ms - sa_start_ms);
+                    t_start * (log_ratio * progress.min(1.0)).exp()
+                }
+                1 => {
+                    let progress = (elapsed - restart1_ms) / (restart2_ms - restart1_ms);
+                    t_start2 * (log_ratio2 * progress.min(1.0)).exp()
+                }
+                _ => {
+                    let progress = (elapsed - restart2_ms) / (sa_end_ms - restart2_ms);
+                    t_start3 * (log_ratio3 * progress.min(1.0)).exp()
+                }
             };
         }
         iter_count = iter_count.wrapping_add(1);
@@ -439,7 +454,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                     if q + 1 >= n2 || q <= l { continue; }
                     if !king_adj(path[l], path[q + 1]) { continue; }
 
-                    let k_max = q.min(n2 - 1 - l).min((q - l) / 2).min(3);
+                    let k_max = q.min(n2 - 1 - l).min((q - l) / 2).min(7);
                     if k_max == 0 { continue; }
                     // Try all k in 1..=k_max, pick best delta
                     let mut best_k = 0usize;
@@ -582,10 +597,17 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                 }
             }
         } else {
-            // ── or-opt: [l..=m] を q の後ろへ移動 ───────────────────────────
-            // 条件1保証: path[l-1] の king 隣接から m+1 を探す
+            // ── or-opt (best-improvement): 全候補を走査して最良δを採用 ─────
             let (pr, pc) = path[l - 1];
-            'oropt: for dr in -1i64..=1 {
+            let (lr, lc) = path[l];
+            let mut best_delta = i64::MIN;
+            let mut best_m = 0usize;
+            let mut best_mp1 = 0usize;
+            let mut best_k = 0usize;
+            let mut best_q = 0usize;
+            let mut best_right = false;
+
+            for dr in -1i64..=1 {
                 for dc in -1i64..=1 {
                     if dr == 0 && dc == 0 { continue; }
                     let nr = pr as i64 + dr;
@@ -596,9 +618,8 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                     let k = mp1 - l;
                     if k > max_k { continue; }
                     let m = mp1 - 1;
+                    let sum_seg1 = psum[m + 1] - psum[l];
 
-                    // 条件2保証: path[l] の king 隣接から q を探す
-                    let (lr, lc) = path[l];
                     for dr2 in -1i64..=1 {
                         for dc2 in -1i64..=1 {
                             if dr2 == 0 && dc2 == 0 { continue; }
@@ -607,67 +628,59 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                             if nr2 < 0 || nr2 >= rows as i64 || nc2 < 0 || nc2 >= cols as i64 { continue; }
                             let q = pos_in_path[nr2 as usize * 256 + nc2 as usize] as usize;
                             let is_right = q > m && q - m <= oropt_max_dist;
-                            let is_left  = q + 1 < l; // q < l-1
+                            let is_left  = q + 1 < l;
                             if !is_right && !is_left { continue; }
-
-                            // 条件3: king_adj(path[m], path[q+1])
                             if is_right {
                                 if q + 1 < n2 && !king_adj(path[m], path[q + 1]) { continue; }
                             } else {
-                                // q+1 <= l-1 <= m, always valid index
                                 if !king_adj(path[m], path[q + 1]) { continue; }
                             }
-
                             oropt_iters += 1;
-
-                            let sum_seg1 = psum[m + 1] - psum[l];
                             let delta = if is_right {
-                                let sum_inter = psum[q + 1] - psum[mp1];
-                                (q - m) as i64 * sum_seg1 - k as i64 * sum_inter
+                                (q - m) as i64 * sum_seg1 - k as i64 * (psum[q + 1] - psum[mp1])
                             } else {
-                                let d = l - 1 - q;
-                                let sum_inter = psum[l] - psum[q + 1];
-                                k as i64 * sum_inter - d as i64 * sum_seg1
+                                k as i64 * (psum[l] - psum[q + 1]) - (l - 1 - q) as i64 * sum_seg1
                             };
-
-                            let accept = delta >= 0 || { let r = delta as f64 / temp; r > -30.0 && rng.next_f64() < r.exp() };
-                            if accept {
-                                buf[..k].copy_from_slice(&path[l..=m]);
-                                if is_right {
-                                    let new_start = q - k + 1;
-                                    // fast shift [m+1..=q] → [l..=q-k]
-                                    path.copy_within(m+1..=q, l);
-                                    a_val.copy_within(m+1..=q, l);
-                                    // place segment at [new_start..=q]
-                                    path[new_start..=q].copy_from_slice(&buf[..k]);
-                                    for i in 0..k { a_val[new_start + i] = a[buf[i].0 as usize][buf[i].1 as usize]; }
-                                    // single pass: pos_in_path + psum + wsum
-                                    for i in l..=q {
-                                        pos_in_path[path[i].0 as usize * 256 + path[i].1 as usize] = i as u16;
-                                        psum[i + 1] = psum[i] + a_val[i];
-                                        wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
-                                    }
-                                } else {
-                                    // fast shift [q+1..l] → [q+1+k..=m]
-                                    path.copy_within(q+1..l, q+1+k);
-                                    a_val.copy_within(q+1..l, q+1+k);
-                                    // place segment at [q+1..=q+k]
-                                    path[q+1..=q+k].copy_from_slice(&buf[..k]);
-                                    for i in 0..k { a_val[q + 1 + i] = a[buf[i].0 as usize][buf[i].1 as usize]; }
-                                    // single pass: pos_in_path + psum + wsum
-                                    for i in q+1..=m {
-                                        pos_in_path[path[i].0 as usize * 256 + path[i].1 as usize] = i as u16;
-                                        psum[i + 1] = psum[i] + a_val[i];
-                                        wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
-                                    }
-                                }
-                                oropt_accepted += 1;
-                                break 'oropt;
+                            if delta > best_delta {
+                                best_delta = delta;
+                                best_m = m; best_mp1 = mp1; best_k = k;
+                                best_q = q; best_right = is_right;
                             }
                         }
                     }
-
-
+                }
+            }
+            // SA acceptance on best candidate
+            if best_k > 0 {
+                let accept = best_delta >= 0 || {
+                    let r = best_delta as f64 / temp; r > -30.0 && rng.next_f64() < r.exp()
+                };
+                if accept {
+                    let (m, mp1, k, q) = (best_m, best_mp1, best_k, best_q);
+                    buf[..k].copy_from_slice(&path[l..=m]);
+                    if best_right {
+                        let new_start = q - k + 1;
+                        path.copy_within(mp1..=q, l);
+                        a_val.copy_within(mp1..=q, l);
+                        path[new_start..=q].copy_from_slice(&buf[..k]);
+                        for i in 0..k { a_val[new_start + i] = a[buf[i].0 as usize][buf[i].1 as usize]; }
+                        for i in l..=q {
+                            pos_in_path[path[i].0 as usize * 256 + path[i].1 as usize] = i as u16;
+                            psum[i + 1] = psum[i] + a_val[i];
+                            wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
+                        }
+                    } else {
+                        path.copy_within(q+1..l, q+1+k);
+                        a_val.copy_within(q+1..l, q+1+k);
+                        path[q+1..=q+k].copy_from_slice(&buf[..k]);
+                        for i in 0..k { a_val[q + 1 + i] = a[buf[i].0 as usize][buf[i].1 as usize]; }
+                        for i in q+1..=m {
+                            pos_in_path[path[i].0 as usize * 256 + path[i].1 as usize] = i as u16;
+                            psum[i + 1] = psum[i] + a_val[i];
+                            wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
+                        }
+                    }
+                    oropt_accepted += 1;
                 }
             }
         }
