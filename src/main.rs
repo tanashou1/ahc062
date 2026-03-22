@@ -242,9 +242,17 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let sa_start_ms = timer.elapsed().as_millis() as f64;
     let sa_end_ms   = TIME_LIMIT_MS as f64;
     let sa_duration = (sa_end_ms - sa_start_ms).max(1.0);
-    let t_start = 1e7f64;
+    let t_start = 3e7f64;
     let t_end   = 3e4f64;
-    let log_ratio = (t_end / t_start).ln(); // precompute for temp = t_start * exp(log_ratio * progress)
+    let log_ratio = (t_end / t_start).ln();
+    // Iterated SA: restart from best at midpoint with moderate temperature
+    let t_start2   = 1e6f64;
+    let log_ratio2 = (t_end / t_start2).ln();
+    let midpoint_ms = sa_start_ms + sa_duration * 0.4;
+    let mut best_raw: i64 = wsum[n2];
+    let mut best_path_saved: Vec<Pos> = path.clone();
+    let mut best_a_val_saved: Vec<i64> = a_val.clone();
+    let mut restarted = false;
     let mut twoopt_iters    = 0u64;
     let mut twoopt_accepted = 0u64;
     let mut oropt_iters    = 0u64;
@@ -257,8 +265,37 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
         if iter_count & 255 == 0 {
             let elapsed = timer.elapsed().as_millis() as f64;
             if elapsed >= sa_end_ms { break; }
-            let progress = (elapsed - sa_start_ms) / sa_duration;
-            temp = t_start * (log_ratio * progress).exp();
+
+            // Track best solution
+            let cur_raw = wsum[n2];
+            if cur_raw > best_raw {
+                best_raw = cur_raw;
+                best_path_saved.copy_from_slice(path);
+                best_a_val_saved.copy_from_slice(&a_val);
+            }
+
+            // Restart at midpoint: restore best and reheat
+            if !restarted && elapsed >= midpoint_ms {
+                restarted = true;
+                if best_raw > wsum[n2] {
+                    path.copy_from_slice(&best_path_saved);
+                    a_val.copy_from_slice(&best_a_val_saved);
+                    for (t, &(r, c)) in path.iter().enumerate() { pos_in_path[r][c] = t; }
+                    psum[0] = 0; wsum[0] = 0;
+                    for i in 0..n2 {
+                        psum[i + 1] = psum[i] + a_val[i];
+                        wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
+                    }
+                }
+            }
+
+            temp = if !restarted {
+                let progress = (elapsed - sa_start_ms) / (midpoint_ms - sa_start_ms);
+                t_start * (log_ratio * progress.min(1.0)).exp()
+            } else {
+                let progress = (elapsed - midpoint_ms) / (sa_end_ms - midpoint_ms);
+                t_start2 * (log_ratio2 * progress.min(1.0)).exp()
+            };
         }
         iter_count = iter_count.wrapping_add(1);
 
