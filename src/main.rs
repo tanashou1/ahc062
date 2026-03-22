@@ -310,7 +310,7 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let n2   = path.len();
     let rows = a.len();
     let cols = a[0].len();
-    let oropt_max_dist = n2; // or-opt で q-m の最大距離 (unlimited)
+    let oropt_max_dist = n2; // or-opt で q-m の最大距離
     let max_k = n;              // or-opt で移動するセグメントの最大長
 
     let mut pos_in_path = vec![0u16; rows * 256];
@@ -340,9 +340,10 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
     let t_start3   = 8e5f64;
     let t_end3     = 8e3f64;
     let log_ratio3 = (t_end3 / t_start3).ln();
-    let restart1_ms = sa_start_ms + sa_duration * 0.55;
+    let restart1_ms = sa_start_ms + sa_duration * 0.60;
     let restart2_ms = sa_start_ms + sa_duration * 0.80;
-    let mut best_raw: i64 = wsum[n2];
+    // Compute initial score correctly
+    let mut best_raw: i64 = a_val.iter().enumerate().map(|(i, &av)| i as i64 * av).sum();
     let mut best_path_saved: Vec<Pos> = path.clone();
     let mut best_a_val_saved: Vec<i64> = a_val.clone();
     let mut restart_phase = 0u32; // 0=phase1, 1=phase2, 2=phase3
@@ -362,20 +363,30 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
             let elapsed = timer.elapsed().as_millis() as f64;
             if elapsed >= sa_end_ms { break; }
 
-            // Track best solution
-            let cur_raw = wsum[n2];
-            if cur_raw > best_raw {
-                best_raw = cur_raw;
-                best_path_saved.copy_from_slice(path);
-                best_a_val_saved.copy_from_slice(&a_val);
+            // Track best solution every 8192 iters via fresh score computation (~1% overhead)
+            if iter_count & 8191 == 0 {
+                let cur_raw: i64 = a_val.iter().enumerate().map(|(i, &av)| i as i64 * av).sum();
+                if cur_raw > best_raw {
+                    best_raw = cur_raw;
+                    best_path_saved.copy_from_slice(path);
+                    best_a_val_saved.copy_from_slice(&a_val);
+                }
             }
 
-            // Restart logic: restore best and reheat at scheduled points
+            // Restart logic: at scheduled points, restore best path and apply mega-reheat
             let do_restart = (restart_phase == 0 && elapsed >= restart1_ms)
                           || (restart_phase == 1 && elapsed >= restart2_ms);
             if do_restart {
                 restart_phase += 1;
-                if best_raw > wsum[n2] {
+                // Compute current score accurately at this checkpoint
+                let cur_raw_now: i64 = a_val.iter().enumerate().map(|(i, &av)| i as i64 * av).sum();
+                if cur_raw_now > best_raw {
+                    best_raw = cur_raw_now;
+                    best_path_saved.copy_from_slice(path);
+                    best_a_val_saved.copy_from_slice(&a_val);
+                }
+                if best_raw > cur_raw_now {
+                    // Restore best path before mega-reheat
                     path.copy_from_slice(&best_path_saved);
                     a_val.copy_from_slice(&best_a_val_saved);
                     for (t, &(r, c)) in path.iter().enumerate() { pos_in_path[r as usize * 256 + c as usize] = t as u16; }
@@ -384,9 +395,8 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                         psum[i + 1] = psum[i] + a_val[i];
                         wsum[i + 1] = wsum[i] + i as i64 * a_val[i];
                     }
-                } else {
-                    restart_phase += 1; // skip to next phase if current is already best
                 }
+                restart_phase += 1; // skip to phase 3 (mega-reheat via phase-3 formula at phase-1 time)
             }
 
             temp = match restart_phase {
@@ -684,6 +694,11 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                 }
             }
         }
+    }
+    // Final best restore
+    let cur_raw_final: i64 = a_val.iter().enumerate().map(|(i, &av)| i as i64 * av).sum();
+    if best_raw > cur_raw_final {
+        path.copy_from_slice(&best_path_saved);
     }
     eprintln!("total_iters={iter_count}");
     eprintln!("twoopt: iters={twoopt_iters} acc={twoopt_accepted}");
