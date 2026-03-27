@@ -1,4 +1,5 @@
-use std::io::{self, Read};
+use std::io::{self, Read, Write, BufWriter};
+use std::fs::File;
 use std::time::Instant;
 
 const TIME_LIMIT_MS: u64 = 2950;
@@ -40,9 +41,14 @@ fn main() {
     let raw = raw_score(&a, &path);
     eprintln!("init_score={}", display_score(raw, (n * n) as i64));
 
+    // Visualization mode: write frame data to file if VIS_MODE is set
+    let vis_file: Option<BufWriter<File>> = std::env::var("AHC_VIS_FILE").ok()
+        .and_then(|p| File::create(p).ok())
+        .map(|f| BufWriter::with_capacity(256 * 1024, f));
+
     let phase1_end = 150u64;
     sa_block_swap(&a, &mut path, n, &mut Rng::new(42), timer, phase1_end);
-    sa_twoopt(&a, &mut path, n, &mut Rng::new(43), timer);
+    sa_twoopt(&a, &mut path, n, &mut Rng::new(43), timer, vis_file);
 
     validate_path(&path, n);
     let raw = raw_score(&a, &path);
@@ -306,7 +312,24 @@ fn sa_block_swap(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, t
 //   中間 [q+1..l-1] が右にずれる (shift +k)
 //   delta = k*sum_inter_left - d*sum_seg1   (d = l-1-q)
 // ─────────────────────────────────────────────────────────────────────────────
-fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer: Instant) {
+fn write_vis_frame(
+    vis: &mut BufWriter<File>,
+    elapsed: f64, temp: f64, cur_score: i64, best_score: i64,
+    path: &[Pos], best: &[Pos],
+) {
+    let n2 = path.len();
+    let mut buf = Vec::with_capacity(32 + n2 * 4);
+    buf.extend_from_slice(&elapsed.to_le_bytes());
+    buf.extend_from_slice(&temp.to_le_bytes());
+    buf.extend_from_slice(&cur_score.to_le_bytes());
+    buf.extend_from_slice(&best_score.to_le_bytes());
+    for &(r, c) in path { buf.push(r); buf.push(c); }
+    for &(r, c) in best  { buf.push(r); buf.push(c); }
+    let _ = vis.write_all(&buf);
+    let _ = vis.flush();
+}
+
+fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer: Instant, mut vis_file: Option<BufWriter<File>>) {
     let n2   = path.len();
     let rows = a.len();
     let cols = a[0].len();
@@ -357,6 +380,8 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
 
     let mut temp = t_start;
     let mut iter_count = 0u32;
+    let vis_interval_ms = 200.0f64;
+    let mut next_vis_ms = sa_start_ms + vis_interval_ms;
     loop {
         // Update temperature every 256 iters to avoid per-iter powf/elapsed overhead
         if iter_count & 255 == 0 {
@@ -370,6 +395,15 @@ fn sa_twoopt(a: &[Vec<i64>], path: &mut Vec<Pos>, n: usize, rng: &mut Rng, timer
                     best_raw = cur_raw;
                     best_path_saved.copy_from_slice(path);
                     best_a_val_saved.copy_from_slice(&a_val);
+                }
+            }
+
+            // Write visualization frame
+            if let Some(ref mut vf) = vis_file {
+                if elapsed >= next_vis_ms {
+                    next_vis_ms = elapsed + vis_interval_ms;
+                    let cur_raw: i64 = a_val.iter().enumerate().map(|(i, &av)| i as i64 * av).sum();
+                    write_vis_frame(vf, elapsed, temp, cur_raw, best_raw, path, &best_path_saved);
                 }
             }
 
